@@ -20,6 +20,7 @@ class SddfStatus(IntEnum):
     NET_INVALID_CLIENT_NUMBER = 106,
     NET_INVALID_BUFFER_NUMBER = 107,
     GPIO_INVALID_OPTIONS = 203,
+    PAGER_TOO_MANY_CLIENTS = 3,
 
 
 # TOOD: double check
@@ -44,6 +45,8 @@ libsdfgen.sdfgen_dtb_node.argtypes = [c_void_p, c_char_p]
 
 libsdfgen.sdfgen_add_pd.restype = None
 libsdfgen.sdfgen_add_pd.argtypes = [c_void_p, c_void_p]
+libsdfgen.sdfgen_add_cnode.restype = None
+libsdfgen.sdfgen_add_cnode.argtypes = [c_void_p, c_void_p]
 libsdfgen.sdfgen_add_mr.restype = None
 libsdfgen.sdfgen_add_mr.argtypes = [c_void_p, c_void_p]
 libsdfgen.sdfgen_add_channel.restype = None
@@ -61,6 +64,8 @@ libsdfgen.sdfgen_pd_set_stack_size.restype = None
 libsdfgen.sdfgen_pd_set_stack_size.argtypes = [c_void_p, c_uint32]
 libsdfgen.sdfgen_pd_set_cpu.restype = None
 libsdfgen.sdfgen_pd_set_cpu.argtypes = [c_void_p, c_uint8]
+libsdfgen.sdfgen_pd_set_backed.restype = None
+libsdfgen.sdfgen_pd_set_backed.argtypes = [c_void_p, c_bool]
 
 libsdfgen.sdfgen_render.restype = c_char_p
 libsdfgen.sdfgen_render.argtypes = [c_void_p]
@@ -84,15 +89,25 @@ libsdfgen.sdfgen_channel_get_pd_a_id.argtypes = [c_void_p]
 libsdfgen.sdfgen_channel_get_pd_b_id.restype = c_uint8
 libsdfgen.sdfgen_channel_get_pd_b_id.argtypes = [c_void_p]
 
+libsdfgen.sdfgen_cap_map_create.restype = c_void_p
+libsdfgen.sdfgen_cap_map_create.argtypes = [c_void_p, c_void_p, c_void_p, c_uint64]
+libsdfgen.sdfgen_cap_map_destroy.restype = None
+libsdfgen.sdfgen_cap_map_destroy.argtypes = [c_void_p]
+
+libsdfgen.sdfgen_boot_info_create.restype = c_void_p
+libsdfgen.sdfgen_boot_info_create.argtypes = [c_void_p]
+libsdfgen.sdfgen_boot_info_destroy.restype = None
+libsdfgen.sdfgen_boot_info_destroy.argtypes = [c_void_p]
+
 libsdfgen.sdfgen_map_create.restype = c_void_p
-libsdfgen.sdfgen_map_create.argtypes = [c_void_p, c_uint64, MapPermsType, c_bool, c_char_p, c_char_p]
+libsdfgen.sdfgen_map_create.argtypes = [c_void_p, c_uint64, MapPermsType, c_bool, c_char_p, c_char_p, c_char_p]
 libsdfgen.sdfgen_map_get_vaddr.restype = c_uint64
 libsdfgen.sdfgen_map_get_vaddr.argtypes = [c_void_p]
 libsdfgen.sdfgen_map_destroy.restype = None
 libsdfgen.sdfgen_map_destroy.argtypes = [c_void_p]
 
 libsdfgen.sdfgen_mr_create.restype = c_void_p
-libsdfgen.sdfgen_mr_create.argtypes = [c_char_p, c_uint64]
+libsdfgen.sdfgen_mr_create.argtypes = [c_char_p, c_uint64, c_char_p, c_char_p]
 libsdfgen.sdfgen_mr_create_physical.restype = c_void_p
 libsdfgen.sdfgen_mr_create_physical.argtypes = [c_void_p, c_char_p, c_uint64, POINTER(c_uint64)]
 libsdfgen.sdfgen_mr_get_size.restype = c_uint64
@@ -102,6 +117,11 @@ libsdfgen.sdfgen_mr_get_paddr.argtypes = [c_void_p, POINTER(c_uint64)]
 
 libsdfgen.sdfgen_mr_destroy.restype = None
 libsdfgen.sdfgen_mr_destroy.argtypes = [c_void_p]
+
+libsdfgen.sdfgen_cnode_create.restype = c_void_p
+libsdfgen.sdfgen_cnode_create.argtypes = [c_char_p, c_bool, c_uint8]
+libsdfgen.sdfgen_cnode_destroy.restype = None
+libsdfgen.sdfgen_cnode_destroy.argtypes = [c_void_p]
 
 libsdfgen.sdfgen_irq_create.restype = c_void_p
 libsdfgen.sdfgen_irq_create.argtypes = [c_uint32, POINTER(c_uint32), POINTER(c_uint8), c_char_p]
@@ -146,8 +166,12 @@ libsdfgen.sdfgen_pd_add_child.restype = c_int8
 libsdfgen.sdfgen_pd_add_child.argtypes = [c_void_p, c_void_p, POINTER(c_uint8)]
 libsdfgen.sdfgen_pd_get_map_vaddr.restype = c_uint64
 libsdfgen.sdfgen_pd_get_map_vaddr.argtypes = [c_void_p, c_void_p]
+libsdfgen.sdfgen_pd_add_boot_info.restype = None
+libsdfgen.sdfgen_pd_add_boot_info.argtypes = [c_void_p, c_void_p]
 libsdfgen.sdfgen_pd_add_map.restype = None
 libsdfgen.sdfgen_pd_add_map.argtypes = [c_void_p, c_void_p]
+libsdfgen.sdfgen_pd_add_cap_map.restype = None
+libsdfgen.sdfgen_pd_add_cap_map.argtypes = [c_void_p, c_void_p]
 libsdfgen.sdfgen_pd_add_irq.restype = c_int8
 libsdfgen.sdfgen_pd_add_irq.argtypes = [c_void_p, c_void_p]
 libsdfgen.sdfgen_pd_set_virtual_machine.restype = c_bool
@@ -299,6 +323,17 @@ libsdfgen.sdfgen_vmm_connect.restype = c_bool
 libsdfgen.sdfgen_vmm_connect.argtypes = [c_void_p]
 libsdfgen.sdfgen_vmm_serialise_config.restype = c_bool
 libsdfgen.sdfgen_vmm_serialise_config.argtypes = [c_void_p, c_char_p]
+
+libsdfgen.sdfgen_lionsos_pager.restype = c_void_p
+libsdfgen.sdfgen_lionsos_pager.argtypes = [c_void_p, c_void_p]
+libsdfgen.sdfgen_lionsos_pager_destroy.restype = None
+libsdfgen.sdfgen_lionsos_pager_destroy.argtypes = [c_void_p]
+libsdfgen.sdfgen_lionsos_pager_add_client.restype = c_uint32
+libsdfgen.sdfgen_lionsos_pager_add_client.argtypes = [c_void_p, c_void_p]
+libsdfgen.sdfgen_lionsos_pager_connect.restype = c_bool
+libsdfgen.sdfgen_lionsos_pager_connect.argtypes = [c_void_p]
+libsdfgen.sdfgen_lionsos_pager_serialise_config.restype = c_bool
+libsdfgen.sdfgen_lionsos_pager_serialise_config.argtypes = [c_void_p, c_char_p]
 
 libsdfgen.sdfgen_lionsos_fs_fat.restype = c_void_p
 libsdfgen.sdfgen_lionsos_fs_fat.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p, c_uint32]
@@ -489,6 +524,7 @@ class SystemDescription:
             passive: Optional[bool] = None,
             stack_size: Optional[int] = None,
             cpu: Optional[int] = None,
+            backed: bool = True,
         ) -> None:
             self._name = name
             self._program_image = program_image
@@ -508,6 +544,7 @@ class SystemDescription:
             if cpu is not None:
                 libsdfgen.sdfgen_pd_set_cpu(self._obj, cpu)
             self.keep_alive = set()
+            libsdfgen.sdfgen_pd_set_backed(self._obj, backed)
 
         @property
         def name(self) -> str:
@@ -536,9 +573,15 @@ class SystemDescription:
             """
             return libsdfgen.sdfgen_pd_get_map_vaddr(self._obj, mr._obj)
 
+        def add_boot_info(self, boot_info: SystemDescription.BootInfo):
+            libsdfgen.sdfgen_pd_add_boot_info(self._obj, boot_info._obj)
+
         def add_map(self, map: SystemDescription.Map):
             self.keep_alive.add(map)
             libsdfgen.sdfgen_pd_add_map(self._obj, map._obj)
+
+        def add_cap_map(self, cap_map: SystemDescription.CapMap):
+            libsdfgen.sdfgen_pd_add_cap_map(self._obj, cap_map._obj)
 
         def add_irq(self, irq: SystemDescription.Irq) -> int:
             self.keep_alive.add(irq)
@@ -638,6 +681,7 @@ class SystemDescription:
             cached: bool = True,
             setvar_vaddr: Optional[str] = None,
             setvar_size: Optional[str] = None,
+            setvar_prefill_size: Optional[str] = None,
         ) -> None:
             c_perms = SystemDescription.Map._perms_to_c_bindings(perms)
             c_setvar_vaddr = c_char_p(0)
@@ -646,13 +690,89 @@ class SystemDescription:
             c_setvar_size = c_char_p(0)
             if setvar_size is not None:
                 c_setvar_size = c_char_p(setvar_size.encode("utf-8"))
-            self._obj = libsdfgen.sdfgen_map_create(mr._obj, vaddr, c_perms, cached, c_setvar_vaddr, c_setvar_size)
+            c_setvar_prefill_size = c_char_p(0)
+            if setvar_prefill_size is not None:
+                c_setvar_prefill_size = c_char_p(setvar_prefill_size.encode("utf-8"))
+            self._obj = libsdfgen.sdfgen_map_create(
+                mr._obj, vaddr, c_perms, cached, c_setvar_vaddr, c_setvar_size, c_setvar_prefill_size
+            )
             if self._obj is None:
                 raise Exception("failed to create mapping")
 
         @property
         def vaddr(self):
             return libsdfgen.sdfgen_map_get_vaddr(self._obj)
+
+    class CapMap:
+        _obj: c_void_p
+
+        class CapType(IntEnum):
+            TCB = 0,
+            SC = 1,
+            Vspace = 2,
+            Cspace = 3,
+            Cnode = 4,
+
+        def __init__(
+            self,
+            type: CapType,
+            pd: Optional[SystemDescription.ProtectionDomain],
+            cnode: Optional[SystemDescription.CNode],
+            dest_cspace_slot: int,
+        ) -> None:
+            c_type = c_char_p(0)
+            if type is self.CapType.TCB:
+                c_type = c_char_p("tcb".encode("utf-8"))
+            elif type is self.CapType.SC:
+                c_type = c_char_p("sc".encode("utf-8"))
+            elif type is self.CapType.Vspace:
+                c_type = c_char_p("vspace".encode("utf-8"))
+            elif type is self.CapType.Cspace:
+                c_type = c_char_p("cspace".encode("utf-8"))
+            elif type is self.CapType.Cnode:
+                c_type = c_char_p("cnode".encode("utf-8"))
+
+            c_cnode = c_char_p(0)
+            if cnode:
+                c_cnode = c_char_p(cnode._name.encode("utf-8"))
+
+            c_pd = c_char_p(0)
+            if pd:
+                c_pd = c_char_p(pd._name.encode("utf-8"))
+
+            self._obj = libsdfgen.sdfgen_cap_map_create(c_type, c_cnode, c_pd, dest_cspace_slot)
+
+    class BootInfo:
+        _obj: c_void_p
+
+        def __init__(
+            self,
+            bi_type: str,
+        ) -> None:
+            c_bi_type = c_char_p(bi_type.encode("utf-8"))
+            self._obj = libsdfgen.sdfgen_boot_info_create(c_bi_type)
+
+        def __del__(self):
+            if hasattr(self, "_obj"):
+                libsdfgen.sdfgen_boot_info_destroy(self._obj)
+
+    class CNode:
+        _obj: c_void_p
+        _name: str
+
+        def __init__(
+                self,
+                name: str,
+                post_capdl_untypeds: bool,
+                size_bits: int,
+        ) -> None:
+            self._name = name
+            c_name = c_char_p(name.encode("utf-8"))
+            self._obj = libsdfgen.sdfgen_cnode_create(c_name, post_capdl_untypeds, size_bits)
+
+        def __del__(self):
+            if hasattr(self, "_obj"):
+                libsdfgen.sdfgen_cnode_destroy(self._obj)
 
     class MemoryRegion:
         _obj: c_void_p
@@ -665,15 +785,23 @@ class SystemDescription:
             size: int,
             *,
             physical: Optional[bool] = None,
-            paddr: Optional[int] = None
+            paddr: Optional[int] = None,
+            prefill_bootinfo: Optional[str] = None,
+            prefill_path: Optional[str] = None,
         ) -> None:
             c_name = c_char_p(name.encode("utf-8"))
+            c_prefill_bootinfo = c_char_p(0)
+            if prefill_bootinfo is not None:
+                c_prefill_bootinfo = c_char_p(prefill_bootinfo.encode("utf-8"))
+            c_prefill_path = c_char_p(0)
+            if prefill_path is not None:
+                c_prefill_path = c_char_p(prefill_path.encode("utf-8"))
             if paddr is not None:
                 physical = True
             if physical:
                 self._obj = libsdfgen.sdfgen_mr_create_physical(sdf._obj, c_name, size, ffi_uint64_ptr(paddr))
             else:
-                self._obj = libsdfgen.sdfgen_mr_create(c_name, size)
+                self._obj = libsdfgen.sdfgen_mr_create(c_name, size, c_prefill_bootinfo, c_prefill_path)
             self._size = size
 
         @property
@@ -860,6 +988,9 @@ class SystemDescription:
     def add_pd(self, pd: ProtectionDomain):
         self.keep_alive.add(pd)
         libsdfgen.sdfgen_add_pd(self._obj, pd._obj)
+
+    def add_cnode(self, cnode: CNode):
+        libsdfgen.sdfgen_add_cnode(self._obj, cnode._obj)
 
     def add_mr(self, mr: MemoryRegion):
         self.keep_alive.add(mr)
@@ -1442,6 +1573,41 @@ class Vmm:
 
 
 class LionsOs:
+    class Pager:
+        _obj: c_void_p
+
+        def __init__(
+            self,
+            sdf: SystemDescription,
+            pager: SystemDescription.ProtectionDomain,
+        ):
+            self._obj = libsdfgen.sdfgen_lionsos_pager(sdf._obj, pager._obj)
+            if self._obj is None:
+                raise Exception("failed to create pager")
+
+        def add_client(self, client: SystemDescription.ProtectionDomain):
+            ret = libsdfgen.sdfgen_lionsos_pager_add_client(self._obj, client._obj)
+            if ret == SddfStatus.OK:
+                return
+            elif ret == SddfStatus.DUPLICATE_CLIENT:
+                raise Exception(f"duplicate client given '{client}'")
+            elif ret == SddfStatus.INVALID_CLIENT:
+                raise Exception(f"invalid client given '{client}'")
+            elif ret == SddfStatus.PAGER_TOO_MANY_CLIENTS:
+                raise Exception(f"too many pager clients, cannot add '{client}'")
+            else:
+                raise Exception(f"internal error: {ret}")
+
+        def connect(self) -> bool:
+            return libsdfgen.sdfgen_lionsos_pager_connect(self._obj)
+
+        def serialise_config(self, output_dir: str) -> bool:
+            c_output_dir = c_char_p(output_dir.encode("utf-8"))
+            return libsdfgen.sdfgen_lionsos_pager_serialise_config(self._obj, c_output_dir)
+
+        def __del__(self):
+            libsdfgen.sdfgen_lionsos_pager_destroy(self._obj)
+
     class FileSystem:
         class Fat:
             _obj: c_void_p

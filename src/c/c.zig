@@ -20,7 +20,10 @@ const IoPort = SystemDescription.IoPort;
 const Vm = SystemDescription.VirtualMachine;
 const Channel = SystemDescription.Channel;
 const Mr = SystemDescription.MemoryRegion;
+const CNode = SystemDescription.CNode;
 const Map = SystemDescription.Map;
+const CapMap = SystemDescription.CapMap;
+const BootInfo = SystemDescription.BootInfo;
 const Arch = SystemDescription.Arch;
 
 fn helper_c_arch_to_enum(c_arch: bindings.sdfgen_arch_t) Arch {
@@ -63,6 +66,11 @@ export fn sdfgen_add_mr(c_sdf: *align(8) anyopaque, c_mr: *align(8) anyopaque) v
     sdf.addMemoryRegion(mr.*);
 }
 
+export fn sdfgen_add_cnode(c_sdf: *align(8) anyopaque, c_cnode: *align(8) anyopaque) void {
+    const sdf: *SystemDescription = @ptrCast(c_sdf);
+    const cnode: *CNode = @ptrCast(c_cnode);
+    sdf.addCNode(cnode.*);
+}
 export fn sdfgen_add_channel(c_sdf: *align(8) anyopaque, c_ch: *align(8) anyopaque) void {
     const sdf: *SystemDescription = @ptrCast(c_sdf);
     const ch: *Channel = @ptrCast(c_ch);
@@ -159,11 +167,25 @@ export fn sdfgen_pd_get_map_vaddr(c_pd: *align(8) anyopaque, c_mr: *align(8) any
     return pd.getMapVaddr(mr);
 }
 
+export fn sdfgen_pd_add_boot_info(c_pd: *align(8) anyopaque, c_boot_info: *align(8) anyopaque) void {
+    const pd: *Pd = @ptrCast(c_pd);
+    const boot_info: *BootInfo = @ptrCast(c_boot_info);
+
+    pd.addBootInfo(boot_info.*);
+}
+
 export fn sdfgen_pd_add_map(c_pd: *align(8) anyopaque, c_map: *align(8) anyopaque) void {
     const pd: *Pd = @ptrCast(c_pd);
     const map: *Map = @ptrCast(c_map);
 
     pd.addMap(map.*);
+}
+
+export fn sdfgen_pd_add_cap_map(c_pd: *align(8) anyopaque, c_cap_map: *align(8) anyopaque) void {
+    const pd: *Pd = @ptrCast(c_pd);
+    const cap_map: *CapMap = @ptrCast(c_cap_map);
+
+    pd.addCapMap(cap_map.*);
 }
 
 export fn sdfgen_pd_add_irq(c_pd: *align(8) anyopaque, c_irq: *align(8) anyopaque) i8 {
@@ -215,6 +237,11 @@ export fn sdfgen_pd_set_stack_size(c_pd: *align(8) anyopaque, stack_size: u32) v
 export fn sdfgen_pd_set_cpu(c_pd: *align(8) anyopaque, cpu: u8) void {
     const pd: *Pd = @ptrCast(c_pd);
     pd.cpu = cpu;
+}
+
+export fn sdfgen_pd_set_backed(c_pd: *align(8) anyopaque, backed: bool) void {
+    const pd: *Pd = @ptrCast(c_pd);
+    pd.backed = backed;
 }
 
 export fn sdfgen_pd_set_passive(c_pd: *align(8) anyopaque, passive: bool) void {
@@ -338,7 +365,7 @@ export fn sdfgen_irq_ioapic_create(ioapic: u64, pin: u64, c_trigger: [*c]binding
                 log.err("failed to create IOAPIC IRQ at chip {}, pin {}, vector {}: invalid polarity '{}'", .{ ioapic, pin, vector, c_polarity.* });
                 allocator.destroy(irq);
                 return null;
-            }
+            },
         };
         options.polarity = polarity;
     }
@@ -419,11 +446,25 @@ export fn sdfgen_ioport_destroy(c_ioport: *align(8) anyopaque) void {
     allocator.destroy(ioport);
 }
 
-export fn sdfgen_mr_create(name: [*c]u8, size: u64) *anyopaque {
+export fn sdfgen_mr_create(name: [*c]u8, size: u64, prefill_bootinfo: [*c]u8, prefill_path: [*c]u8) *anyopaque {
     const mr = allocator.create(Mr) catch @panic("OOM");
-    mr.* = Mr.create(allocator, std.mem.span(name), size, .{});
+    var options: Mr.Options = .{};
+    if (prefill_bootinfo != null) {
+        options.prefill_bootinfo = allocator.dupe(u8, std.mem.span(prefill_bootinfo)) catch @panic("OOM");
+    }
+    if (prefill_path != null) {
+        options.prefill_path = allocator.dupe(u8, std.mem.span(prefill_path)) catch @panic("OOM");
+    }
+    mr.* = Mr.create(allocator, std.mem.span(name), size, options);
 
     return mr;
+}
+
+export fn sdfgen_cnode_create(name: [*c]u8, post_capdl_untypeds: bool, size_bits: u8) *anyopaque {
+    const cnode = allocator.create(CNode) catch @panic("OOM");
+    cnode.* = CNode.create(allocator, std.mem.span(name), post_capdl_untypeds, size_bits);
+
+    return cnode;
 }
 
 export fn sdfgen_mr_create_physical(c_sdf: *align(8) anyopaque, name: [*c]u8, size: u64, paddr: [*c]u64) *anyopaque {
@@ -456,7 +497,12 @@ export fn sdfgen_mr_destroy(c_mr: *align(8) anyopaque) void {
     allocator.destroy(mr);
 }
 
-export fn sdfgen_map_create(c_mr: *align(8) anyopaque, vaddr: u64, c_perms: bindings.sdfgen_map_perms_t, cached: bool, c_setvar_vaddr: [*c]u8, c_setvar_size: [*c]u8) ?*anyopaque {
+export fn sdfgen_cnode_destroy(c_cnode: *align(8) anyopaque) void {
+    const cnode: *CNode = @ptrCast(c_cnode);
+    allocator.destroy(cnode);
+}
+
+export fn sdfgen_map_create(c_mr: *align(8) anyopaque, vaddr: u64, c_perms: bindings.sdfgen_map_perms_t, cached: bool, c_setvar_vaddr: [*c]u8, c_setvar_size: [*c]u8, c_setvar_prefill_size: [*c]u8) ?*anyopaque {
     const mr: *Mr = @ptrCast(c_mr);
 
     var perms: Map.Perms = .{};
@@ -470,12 +516,15 @@ export fn sdfgen_map_create(c_mr: *align(8) anyopaque, vaddr: u64, c_perms: bind
         perms.execute = true;
     }
 
-    var options: Map.Options = .{.cached = cached};
+    var options: Map.Options = .{ .cached = cached };
     if (c_setvar_vaddr != null) {
         options.setvar_vaddr = allocator.dupe(u8, std.mem.span(c_setvar_vaddr)) catch @panic("OOM");
     }
     if (c_setvar_size != null) {
         options.setvar_size = allocator.dupe(u8, std.mem.span(c_setvar_size)) catch @panic("OOM");
+    }
+    if (c_setvar_prefill_size != null) {
+        options.setvar_prefill_size = allocator.dupe(u8, std.mem.span(c_setvar_prefill_size)) catch @panic("OOM");
     }
 
     const map = allocator.create(Map) catch @panic("OOM");
@@ -499,7 +548,39 @@ export fn sdfgen_map_destroy(c_map: *align(8) anyopaque) void {
     if (map.setvar_size) |s| {
         allocator.free(s);
     }
+    if (map.setvar_prefill_size) |s| {
+        allocator.free(s);
+    }
     allocator.destroy(map);
+}
+
+export fn sdfgen_cap_map_create(cap_type: [*c]u8, c_cnode_name: [*c]u8, c_pd_name: [*c]u8, dest_cspace_slot: u64) ?*anyopaque {
+    const cap_map = allocator.create(CapMap) catch @panic("OOM");
+
+    const cnode_name = if (c_cnode_name != null) std.mem.span(c_cnode_name) else null;
+    const pd_name = if (c_pd_name != null) std.mem.span(c_pd_name) else null;
+
+    cap_map.* = CapMap.create(allocator, std.mem.span(cap_type), cnode_name, pd_name, dest_cspace_slot);
+
+    return cap_map;
+}
+
+export fn sdfgen_cap_map_destroy(c_cap_map: *align(8) anyopaque) void {
+    const cap_map: *CapMap = @ptrCast(c_cap_map);
+    allocator.destroy(cap_map);
+}
+
+export fn sdfgen_boot_info_create(bi_type: [*c]u8) ?*anyopaque {
+    const boot_info = allocator.create(BootInfo) catch @panic("OOM");
+
+    boot_info.* = BootInfo.create(allocator, std.mem.span(bi_type));
+
+    return boot_info;
+}
+
+export fn sdfgen_boot_info_destroy(c_boot_info: *align(8) anyopaque) void {
+    const boot_info: *BootInfo = @ptrCast(c_boot_info);
+    allocator.destroy(boot_info);
 }
 
 export fn sdfgen_channel_create(c_pd_a: *align(8) anyopaque, c_pd_b: *align(8) anyopaque, pd_a_id: [*c]u8, pd_b_id: [*c]u8, pd_a_notify: [*c]bool, pd_b_notify: [*c]bool, c_pp: [*c]u8, c_pd_a_setvar_id: [*c]u8, c_pd_b_setvar_id: [*c]u8) ?*anyopaque {
@@ -576,12 +657,7 @@ export fn sdfgen_channel_add(c_sdf: *align(8) anyopaque, c_ch: *align(8) anyopaq
 export fn sdfgen_sddf_timer(c_sdf: *align(8) anyopaque, c_device: ?*align(8) anyopaque, driver: *align(8) anyopaque) *anyopaque {
     const sdf: *SystemDescription = @ptrCast(c_sdf);
     const timer = allocator.create(sddf.Timer) catch @panic("OOM");
-    timer.* = sddf.Timer.init(
-        allocator,
-        sdf,
-        if (c_device) |raw| @ptrCast(raw) else null,
-        @ptrCast(driver)
-    );
+    timer.* = sddf.Timer.init(allocator, sdf, if (c_device) |raw| @ptrCast(raw) else null, @ptrCast(driver));
 
     return timer;
 }
@@ -634,7 +710,7 @@ export fn sdfgen_sddf_serial(c_sdf: *align(8) anyopaque, c_device: ?*align(8) an
     }
     const serial = allocator.create(sddf.Serial) catch @panic("OOM");
     serial.* = sddf.Serial.init(allocator, sdf, if (c_device) |raw| @ptrCast(raw) else null, @ptrCast(driver), @ptrCast(virt_tx), options) catch |e| {
-        log.err("failed to initialiase serial system: {any}", .{ e });
+        log.err("failed to initialiase serial system: {any}", .{e});
         allocator.destroy(serial);
         return null;
     };
@@ -764,12 +840,11 @@ export fn sdfgen_sddf_gpio_serialise_config(system: *align(8) anyopaque, output_
     return true;
 }
 
-
 export fn sdfgen_sddf_blk(c_sdf: *align(8) anyopaque, c_device: ?*align(8) anyopaque, driver: *align(8) anyopaque, virt: *align(8) anyopaque) ?*anyopaque {
     const sdf: *SystemDescription = @ptrCast(c_sdf);
     const blk = allocator.create(sddf.Blk) catch @panic("OOM");
     blk.* = sddf.Blk.init(allocator, sdf, if (c_device) |raw| @ptrCast(raw) else null, @ptrCast(driver), @ptrCast(virt), .{}) catch |e| {
-        log.err("failed to initialiase blk system: {any}", .{ e });
+        log.err("failed to initialiase blk system: {any}", .{e});
         allocator.destroy(blk);
         return null;
     };
@@ -1191,6 +1266,56 @@ export fn sdfgen_sddf_lwip_connect(c_lib: *align(8) anyopaque) bool {
 export fn sdfgen_sddf_lwip_serialise_config(c_lib: *align(8) anyopaque, output_dir: [*c]u8) bool {
     const lib: *sddf.Lwip = @ptrCast(c_lib);
     lib.serialiseConfig(std.mem.span(output_dir)) catch return false;
+
+    return true;
+}
+
+export fn sdfgen_lionsos_pager(c_sdf: *align(8) anyopaque, c_pager: *align(8) anyopaque) ?*anyopaque {
+    const sdf: *SystemDescription = @ptrCast(c_sdf);
+    const pager_pd: *Pd = @ptrCast(c_pager);
+    const pager = allocator.create(lionsos.Pager) catch @panic("OOM");
+    pager.* = lionsos.Pager.init(allocator, sdf, pager_pd, .{});
+
+    return pager;
+}
+
+export fn sdfgen_lionsos_pager_destroy(system: *align(8) anyopaque) void {
+    const pager: *lionsos.Pager = @ptrCast(system);
+    pager.deinit();
+    allocator.destroy(pager);
+}
+
+export fn sdfgen_lionsos_pager_add_client(system: *align(8) anyopaque, client: *align(8) anyopaque) bindings.sdfgen_sddf_status_t {
+    const pager: *lionsos.Pager = @ptrCast(system);
+    pager.addClient(@ptrCast(client)) catch |e| {
+        switch (e) {
+            error.DuplicateClient => return 1,
+            error.InvalidClient => return 2,
+            error.TooManyClients => return 3,
+            // Should never happen when adding a client
+            error.NotConnected => @panic("internal error"),
+        }
+    };
+
+    return 0;
+}
+
+export fn sdfgen_lionsos_pager_connect(system: *align(8) anyopaque) bool {
+    const pager: *lionsos.Pager = @ptrCast(system);
+    pager.connect() catch |e| {
+        log.err("failed to connect pager '{s}': {any}", .{ pager.pager.name, e });
+        return false;
+    };
+
+    return true;
+}
+
+export fn sdfgen_lionsos_pager_serialise_config(system: *align(8) anyopaque, output_dir: [*c]u8) bool {
+    const pager: *lionsos.Pager = @ptrCast(system);
+    pager.serialiseConfig(std.mem.span(output_dir)) catch |e| {
+        log.err("failed to serialise pager '{s}': {any}", .{ pager.pager.name, e });
+        return false;
+    };
 
     return true;
 }

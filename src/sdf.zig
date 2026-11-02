@@ -11,6 +11,7 @@ pub const SystemDescription = struct {
     arch: Arch,
     pds: ArrayList(*ProtectionDomain),
     mrs: ArrayList(MemoryRegion),
+    cnodes: ArrayList(CNode),
     channels: ArrayList(Channel),
     /// Highest allocatable physical address on the platform
     paddr_top: u64,
@@ -91,9 +92,13 @@ pub const SystemDescription = struct {
         size: u64,
         paddr: ?u64,
         page_size: ?PageSize,
+        prefill_bootinfo: ?[]const u8,
+        prefill_path: ?[]const u8,
 
         pub const Options = struct {
             page_size: ?PageSize = null,
+            prefill_bootinfo: ?[]const u8 = null,
+            prefill_path: ?[]const u8 = null,
         };
 
         pub const OptionsPhysical = struct {
@@ -110,6 +115,8 @@ pub const SystemDescription = struct {
                 .name = allocator.dupe(u8, name) catch @panic("Could not allocate name for MemoryRegion"),
                 .size = size,
                 .page_size = options.page_size,
+                .prefill_bootinfo = options.prefill_bootinfo,
+                .prefill_path = options.prefill_path,
                 .paddr = null,
             };
         }
@@ -127,6 +134,8 @@ pub const SystemDescription = struct {
                 .size = size,
                 .paddr = paddr,
                 .page_size = options.page_size,
+                .prefill_bootinfo = null,
+                .prefill_path = null,
             };
         }
 
@@ -143,6 +152,14 @@ pub const SystemDescription = struct {
 
             if (mr.page_size) |page_size| {
                 try std.fmt.format(writer, " page_size=\"0x{x}\"", .{page_size.toInt(sdf.arch)});
+            }
+
+            if (mr.prefill_bootinfo) |prefill_bootinfo| {
+                try std.fmt.format(writer, " prefill_bootinfo=\"{s}\"", .{prefill_bootinfo});
+            }
+
+            if (mr.prefill_path) |prefill_path| {
+                try std.fmt.format(writer, " prefill_path=\"{s}\"", .{prefill_path});
             }
 
             _ = try writer.write(" />\n");
@@ -205,11 +222,13 @@ pub const SystemDescription = struct {
         cached: ?bool,
         setvar_vaddr: ?[]const u8,
         setvar_size: ?[]const u8,
+        setvar_prefill_size: ?[]const u8,
 
         pub const Options = struct {
             cached: ?bool = null,
             setvar_vaddr: ?[]const u8 = null,
             setvar_size: ?[]const u8 = null,
+            setvar_prefill_size: ?[]const u8 = null,
         };
 
         pub const Perms = packed struct {
@@ -292,6 +311,7 @@ pub const SystemDescription = struct {
                 .cached = options.cached,
                 .setvar_vaddr = options.setvar_vaddr,
                 .setvar_size = options.setvar_size,
+                .setvar_prefill_size = options.setvar_prefill_size,
             };
         }
 
@@ -306,6 +326,10 @@ pub const SystemDescription = struct {
 
             if (map.setvar_size) |setvar_size| {
                 try std.fmt.format(writer, " setvar_size=\"{s}\"", .{setvar_size});
+            }
+
+            if (map.setvar_prefill_size) |setvar_prefill_size| {
+                try std.fmt.format(writer, " setvar_prefill_size=\"{s}\"", .{setvar_prefill_size});
             }
 
             if (map.cached) |cached| {
@@ -403,7 +427,121 @@ pub const SystemDescription = struct {
         }
     };
 
+    pub const CapMap = struct {
+        allocator: Allocator,
+        cap_type: []const u8,
+        cnode_name: ?[]const u8,
+        pd: ?[]const u8,
+        core: ?u8,
+        dest_cspace_slot: u64,
+
+        pub fn create(allocator: Allocator, cap_type: []const u8, cnode_name: ?[]const u8, pd: ?[]const u8, dest_cspace_slot: u64) CapMap {
+            const dupe_cnode_name: ?[]const u8 = if (cnode_name) |name|
+                allocator.dupe(u8, name) catch @panic("Could not dupe CNode name")
+            else
+                null;
+            const dupe_pd_name: ?[]const u8 = if (pd) |name|
+                allocator.dupe(u8, name) catch @panic("Could not dupe src PD name")
+            else
+                null;
+
+            return CapMap{
+                .allocator = allocator,
+                .cap_type = allocator.dupe(u8, cap_type) catch @panic("Could not dupe cap type"),
+                .cnode_name = dupe_cnode_name,
+                .pd = dupe_pd_name,
+                .core = null,
+                .dest_cspace_slot = dest_cspace_slot,
+            };
+        }
+
+        pub fn createSchedControl(allocator: Allocator, core: u8, dest_cspace_slot: u64) CapMap {
+            return CapMap{
+                .allocator = allocator,
+                .cap_type = allocator.dupe(u8, "sched_control") catch @panic("Could not dupe cap type"),
+                .cnode_name = null,
+                .pd = null,
+                .core = core,
+                .dest_cspace_slot = dest_cspace_slot,
+            };
+        }
+
+        pub fn destroy(cap_map: *CapMap) void {
+            cap_map.allocator.free(cap_map.cap_type);
+            cap_map.allocator.free(cap_map.pd);
+        }
+
+        pub fn render(cap_map: *const CapMap, writer: ArrayList(u8).Writer, separator: []const u8) !void {
+            try std.fmt.format(writer, "{s}<cap_{s} slot=\"{}\"", .{ separator, cap_map.cap_type, cap_map.dest_cspace_slot });
+
+            if (cap_map.pd) |pd| {
+                try std.fmt.format(writer, " pd=\"{s}\"", .{pd});
+            }
+
+            if (cap_map.cnode_name) |cnode_name| {
+                try std.fmt.format(writer, " cnode_name=\"{s}\"", .{cnode_name});
+            }
+
+            if (cap_map.core) |core| {
+                try std.fmt.format(writer, " core=\"{}\"", .{core});
+            }
+
+            _ = try writer.write(" />\n");
+        }
+    };
+
+    pub const BootInfo = struct {
+        allocator: Allocator,
+        bi_type: []const u8,
+
+        pub fn create(allocator: Allocator, bi_type: []const u8) BootInfo {
+            return BootInfo{
+                .allocator = allocator,
+                .bi_type = allocator.dupe(u8, bi_type) catch @panic("Could not dupe boot info type"),
+            };
+        }
+
+        pub fn destroy(boot_info: *BootInfo) void {
+            boot_info.allocator.free(boot_info.bi_type);
+        }
+
+        pub fn render(boot_info: *const BootInfo, writer: ArrayList(u8).Writer, separator: []const u8) !void {
+            try std.fmt.format(writer, "{s}<bootinfo type=\"{s}\" />\n", .{ separator, boot_info.bi_type });
+        }
+    };
+
+    pub const CNode = struct {
+        allocator: Allocator,
+        name: []const u8,
+        post_capdl_untypeds: bool,
+        size_bits: u8,
+
+        pub fn create(allocator: Allocator, name: []const u8, post_capdl_untypeds: bool, size_bits: u8) CNode {
+            return CNode{
+                .allocator = allocator,
+                .name = allocator.dupe(u8, name) catch @panic("Could not dupe CNode name"),
+                .post_capdl_untypeds = post_capdl_untypeds,
+                .size_bits = size_bits,
+            };
+        }
+
+        pub fn destroy(cnode: *CNode) void {
+            cnode.allocator.free(cnode.name);
+        }
+
+        pub fn render(cnode: *const CNode, writer: ArrayList(u8).Writer, separator: []const u8) !void {
+            try std.fmt.format(writer, "{s}<cnode name=\"{s}\" size_bits=\"{}\"", .{ separator, cnode.name, cnode.size_bits });
+
+            if (cnode.post_capdl_untypeds) {
+                try std.fmt.format(writer, " post_capdl_untypeds=\"true\"", .{});
+            }
+
+            _ = try writer.write(" />\n");
+        }
+    };
+
     pub const ProtectionDomain = struct {
+        backed: bool,
         allocator: Allocator,
         name: []const u8,
         /// Program ELF
@@ -415,8 +553,12 @@ pub const SystemDescription = struct {
         period: ?u32,
         passive: ?bool,
         stack_size: ?u32,
+        /// BootInfo mappings
+        boot_infos: ArrayList(BootInfo),
         /// Memory mappings
         maps: ArrayList(Map),
+        /// Extra cap mappings
+        cap_maps: ArrayList(CapMap),
         /// The length of this array is bound by the maximum number of child PDs a PD can have.
         child_pds: ArrayList(*ProtectionDomain),
         /// The length of this array is bound by the maximum number of IRQs a PD can have.
@@ -427,6 +569,15 @@ pub const SystemDescription = struct {
         /// Keeping track of what IDs are available for channels, IRQs, etc
         channel_ids: std.bit_set.StaticBitSet(MAX_IDS),
         child_ids: std.bit_set.StaticBitSet(MAX_IDS),
+        fault_ids: std.bit_set.StaticBitSet(MAX_IDS),
+
+        /// PD this PD's faults are delivered to, when it is not a child of one
+        fault_handler: ?[]const u8,
+        /// ID this PD is known by to its fault handler
+        fault_id: ?u8,
+        /// CNode this PD's fault clients' ELF frame caps are placed in
+        elf_caps_cnode: ?[]const u8,
+        self_ep_cnode: ?[]const u8,
 
         /// Whether or not ARM SMC is available
         arm_smc: ?bool,
@@ -453,22 +604,33 @@ pub const SystemDescription = struct {
             stack_size: ?u32 = null,
             arm_smc: ?bool = null,
             cpu: ?u8 = null,
+            backed: ?bool = null,
         };
 
         pub fn create(allocator: Allocator, name: []const u8, program_image: ?[]const u8, options: Options) ProtectionDomain {
             const program_image_dupe = if (program_image) |p| allocator.dupe(u8, p) catch @panic("Could not dupe PD program_image") else null;
-
+            var backed: bool = true;
+            if (options.backed) |thing| {
+                backed = thing;
+            }
             return ProtectionDomain{
                 .allocator = allocator,
                 .name = allocator.dupe(u8, name) catch @panic("Could not dupe PD name"),
                 .program_image = program_image_dupe,
+                .boot_infos = ArrayList(BootInfo).init(allocator),
                 .maps = ArrayList(Map).init(allocator),
+                .cap_maps = ArrayList(CapMap).init(allocator),
                 .child_pds = ArrayList(*ProtectionDomain).initCapacity(allocator, MAX_CHILD_PDS) catch @panic("Could not allocate child_pds"),
                 .irqs = ArrayList(Irq).initCapacity(allocator, MAX_IRQS) catch @panic("Could not allocate irqs"),
                 .ioports = ArrayList(IoPort).initCapacity(allocator, MAX_IOPORTS) catch @panic("Could not allocate I/O Ports"),
                 .vm = null,
                 .channel_ids = std.bit_set.StaticBitSet(MAX_IDS).initEmpty(),
                 .child_ids = std.bit_set.StaticBitSet(MAX_IDS).initEmpty(),
+                .fault_ids = std.bit_set.StaticBitSet(MAX_IDS).initEmpty(),
+                .fault_handler = null,
+                .fault_id = null,
+                .elf_caps_cnode = null,
+                .self_ep_cnode = null,
                 .setvars = ArrayList(SetVar).init(allocator),
                 .priority = options.priority,
                 .passive = options.passive,
@@ -478,6 +640,7 @@ pub const SystemDescription = struct {
                 .stack_size = options.stack_size,
                 .child_id = null,
                 .cpu = options.cpu,
+                .backed = backed,
             };
         }
 
@@ -486,6 +649,16 @@ pub const SystemDescription = struct {
             if (pd.program_image) |program_image| {
                 pd.allocator.free(program_image);
             }
+            if (pd.fault_handler) |fault_handler| {
+                pd.allocator.free(fault_handler);
+            }
+            if (pd.self_ep_cnode) |self_ep_cnode| {
+                pd.allocator.free(self_ep_cnode);
+            }
+            if (pd.elf_caps_cnode) |elf_caps_cnode| {
+                pd.allocator.free(elf_caps_cnode);
+            }
+            pd.boot_infos.deinit();
             pd.maps.deinit();
             pd.child_pds.deinit();
             pd.irqs.deinit();
@@ -526,6 +699,14 @@ pub const SystemDescription = struct {
 
         pub fn addMap(pd: *ProtectionDomain, map: Map) void {
             pd.maps.append(map) catch @panic("Could not add Map to ProtectionDomain");
+        }
+
+        pub fn addBootInfo(pd: *ProtectionDomain, boot_info: BootInfo) void {
+            pd.boot_infos.append(boot_info) catch @panic("Could not add BootInfo to ProtectionDomain");
+        }
+
+        pub fn addCapMap(pd: *ProtectionDomain, cap_map: CapMap) void {
+            pd.cap_maps.append(cap_map) catch @panic("Could not add TCB Cap Map to ProtectionDomain");
         }
 
         pub fn addIrq(pd: *ProtectionDomain, irq: Irq) !u8 {
@@ -577,6 +758,21 @@ pub const SystemDescription = struct {
             child.child_id = try allocateId(&pd.child_ids, options.id);
 
             return child.child_id.?;
+        }
+
+        /// Have `client`'s faults delivered to this PD's fault() entry point, without
+        /// making it a child. Returns the ID the client is known by to this PD, which is
+        /// what fault() receives.
+        pub fn addFaultClient(pd: *ProtectionDomain, client: *ProtectionDomain, id: ?u8) !u8 {
+            if (client.fault_handler != null) {
+                log.err("failed to add fault client '{s}' to '{s}', it already has fault handler '{s}'", .{ client.name, pd.name, client.fault_handler.? });
+                return error.DuplicateFaultHandler;
+            }
+
+            client.fault_id = try allocateId(&pd.fault_ids, id);
+            client.fault_handler = pd.allocator.dupe(u8, pd.name) catch @panic("Could not dupe fault handler name");
+
+            return client.fault_id.?;
         }
 
         // TODO: get rid of this extra arg?
@@ -655,6 +851,22 @@ pub const SystemDescription = struct {
                 try std.fmt.format(writer, " cpu=\"{}\"", .{cpu});
             }
 
+            // Microkit defaults this to true, so only say so when it is not.
+            if (!pd.backed) {
+                try std.fmt.format(writer, " backed=\"false\"", .{});
+            }
+
+            if (pd.fault_handler) |fault_handler| {
+                try std.fmt.format(writer, " fault_handler=\"{s}\" fault_id=\"{}\"", .{ fault_handler, pd.fault_id.? });
+            }
+
+            if (pd.self_ep_cnode) |self_ep_cnode| {
+                try std.fmt.format(writer, " self_ep_cnode=\"{s}\"", .{self_ep_cnode});
+            }
+            if (pd.elf_caps_cnode) |elf_caps_cnode| {
+                try std.fmt.format(writer, " elf_caps_cnode=\"{s}\"", .{elf_caps_cnode});
+            }
+
             _ = try writer.write(">\n");
 
             const child_separator = try allocPrint(sdf.allocator, "{s}    ", .{separator});
@@ -663,9 +875,25 @@ pub const SystemDescription = struct {
             if (pd.program_image) |program_image| {
                 try std.fmt.format(writer, "{s}<program_image path=\"{s}\" />\n", .{ child_separator, program_image });
             }
+            for (pd.boot_infos.items) |boot_info| {
+                try boot_info.render(writer, child_separator);
+            }
             for (pd.maps.items) |map| {
                 try map.render(writer, child_separator);
             }
+
+            if (pd.cap_maps.items.len > 0) {
+                try std.fmt.format(writer, "{s}<cspace>\n", .{child_separator});
+            }
+            for (pd.cap_maps.items) |cap_map| {
+                const cap_map_separator = try allocPrint(sdf.allocator, "{s}    ", .{child_separator});
+                try cap_map.render(writer, cap_map_separator);
+            }
+
+            if (pd.cap_maps.items.len > 0) {
+                try std.fmt.format(writer, "{s}</cspace>\n", .{child_separator});
+            }
+
             for (pd.child_pds.items) |child_pd| {
                 try child_pd.render(sdf, writer, child_separator, child_pd.child_id.?);
             }
@@ -725,7 +953,6 @@ pub const SystemDescription = struct {
                 .pp = options.pp,
                 .pd_a_setvar_id = options.pd_a_setvar_id,
                 .pd_b_setvar_id = options.pd_b_setvar_id,
-
             };
         }
 
@@ -782,7 +1009,7 @@ pub const SystemDescription = struct {
 
         const Kind = union(enum) {
             conventional: struct {
-                irq:     u32,
+                irq: u32,
                 trigger: ?Trigger,
             },
 
@@ -834,9 +1061,9 @@ pub const SystemDescription = struct {
                     return s_irq.irq;
                 },
                 else => {
-                    log.err("number called on invalid IRQ kind {s}", .{ @tagName(irq.kind) });
+                    log.err("number called on invalid IRQ kind {s}", .{@tagName(irq.kind)});
                     return null;
-                }
+                },
             }
         }
 
@@ -849,9 +1076,9 @@ pub const SystemDescription = struct {
                     return i_irq.trigger;
                 },
                 else => {
-                    log.err("trigger called on invalid IRQ kind {s}", .{ @tagName(irq.kind) });
+                    log.err("trigger called on invalid IRQ kind {s}", .{@tagName(irq.kind)});
                     return null;
-                }
+                },
             }
         }
 
@@ -866,7 +1093,7 @@ pub const SystemDescription = struct {
 
         pub fn createIoapic(pin: u64, vector: u64, options: IoapicOptions) !Irq {
             return .{
-                .id   = options.id,
+                .id = options.id,
                 .kind = .{
                     .ioapic = .{
                         .ioapic = options.ioapic,
@@ -888,7 +1115,7 @@ pub const SystemDescription = struct {
         pub fn createMsi(pci_bus: u8, pci_device: u8, pci_func: u8, vector: u64, handle: u64, options: MsiOptions) !Irq {
             // @billn: double check does MSI work in the same manner on arm and riscv?
             return .{
-                .id   = options.id,
+                .id = options.id,
                 .kind = .{
                     .msi = .{
                         .pci_bus = pci_bus,
@@ -931,7 +1158,7 @@ pub const SystemDescription = struct {
                 },
                 .msi => |m_irq| {
                     try std.fmt.format(writer, "pcidev=\"{}:{}.{}\" handle=\"{}\" vector=\"{}\" id=\"{}\"", .{ m_irq.pci_bus, m_irq.pci_dev, m_irq.pci_func, m_irq.handle, m_irq.vector, irq.id.? });
-                }
+                },
             }
             if (irq.setvar_id) |setvar_id| {
                 try std.fmt.format(writer, " setvar_id=\"{s}\"", .{setvar_id});
@@ -963,7 +1190,7 @@ pub const SystemDescription = struct {
             // By the time we get here, something should have populated the 'id' field.
             std.debug.assert(ioport.id != null);
 
-            try std.fmt.format(writer, "{s}<ioport id=\"{}\" addr=\"{}\" size=\"{}\" />\n", .{separator, ioport.id.?, ioport.addr, ioport.size});
+            try std.fmt.format(writer, "{s}<ioport id=\"{}\" addr=\"{}\" size=\"{}\" />\n", .{ separator, ioport.id.?, ioport.addr, ioport.size });
         }
     };
 
@@ -976,6 +1203,7 @@ pub const SystemDescription = struct {
             .arch = arch,
             .pds = ArrayList(*ProtectionDomain).init(allocator),
             .mrs = ArrayList(MemoryRegion).init(allocator),
+            .cnodes = ArrayList(CNode).init(allocator),
             .channels = ArrayList(Channel).init(allocator),
             .paddr_top = paddr_top,
         };
@@ -994,6 +1222,10 @@ pub const SystemDescription = struct {
 
     pub fn addMemoryRegion(sdf: *SystemDescription, mr: MemoryRegion) void {
         sdf.mrs.append(mr) catch @panic("Could not add MemoryRegion to SystemDescription");
+    }
+
+    pub fn addCNode(sdf: *SystemDescription, cnode: CNode) void {
+        sdf.cnodes.append(cnode) catch @panic("Could not add CNode to SystemDescription");
     }
 
     pub fn addProtectionDomain(sdf: *SystemDescription, protection_domain: *ProtectionDomain) void {
@@ -1025,6 +1257,9 @@ pub const SystemDescription = struct {
         const separator = "    ";
         for (sdf.mrs.items) |mr| {
             try mr.render(sdf, writer, separator);
+        }
+        for (sdf.cnodes.items) |cnode| {
+            try cnode.render(writer, separator);
         }
         for (sdf.pds.items) |pd| {
             try pd.render(sdf, writer, separator, null);
