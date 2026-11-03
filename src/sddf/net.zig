@@ -32,6 +32,7 @@ pub const Net = struct {
         InvalidVSwitchCopier,
         InvalidClientNumber,
         InvalidBufferNumber,
+        InvalidSpare,
     };
 
     pub const Options = struct {
@@ -84,6 +85,27 @@ pub const Net = struct {
     maybe_rx_dma_mr: ?*Mr,
     client_info: std.array_list.Managed(ClientInfo),
 
+    spare_copiers: std.array_list.Managed(*Pd),
+    spare_copy_configs: std.array_list.Managed(ConfigResources.Net.Copy),
+    /// Filled in by connect(), one per copier given to addSpareClients().
+    spares: std.array_list.Managed(Spare),
+
+    /// A client connection the virtualisers are configured with at build time that no PD is
+    /// on the other end of, for a pager to give to a process it forks. Each region list is
+    /// in the order a client config lists them: free queue, active queue, then data. A
+    /// spare has the buffer counts of a client added with the default ClientOptions.
+    pub const Spare = struct {
+        tx_mrs: [3]Mr,
+        /// The channel virt_tx signals this connection on.
+        tx_id: u8,
+        /// Received packets are copied to the spare by a copier of its own.
+        copier: *Pd,
+        rx_mrs: [3]Mr,
+        /// The channel the copier signals this connection on.
+        rx_id: u8,
+        mac_addr: [6]u8,
+    };
+
     pub fn init(allocator: Allocator, sdf: *SystemDescription, device: ?*dtb.Node, driver: *Pd, virt_tx: *Pd, virt_rx: *Pd, vswitch: ?*Pd, options: Options) Net {
         if (options.rx_dma_mr) |exists_rx_dma| {
             if (exists_rx_dma.*.paddr == null) {
@@ -119,6 +141,9 @@ pub const Net = struct {
             .client_configs = std.array_list.Managed(ConfigResources.Net.Client).init(allocator),
 
             .client_info = std.array_list.Managed(ClientInfo).init(allocator),
+            .spare_copiers = std.array_list.Managed(*Pd).init(allocator),
+            .spare_copy_configs = std.array_list.Managed(ConfigResources.Net.Copy).init(allocator),
+            .spares = std.array_list.Managed(Spare).init(allocator),
             .rx_buffers = options.rx_buffers,
             .maybe_rx_dma_mr = options.rx_dma_mr,
         };
@@ -130,6 +155,9 @@ pub const Net = struct {
         system.copy_configs.deinit();
         system.client_configs.deinit();
         system.client_info.deinit();
+        system.spare_copiers.deinit();
+        system.spare_copy_configs.deinit();
+        system.spares.deinit();
     }
 
     fn parseMacAddr(mac_str: []const u8) ![6]u8 {
@@ -240,6 +268,32 @@ pub const Net = struct {
         system.client_info.items[client_idx].vswitch = options.vswitch;
     }
 
+    /// Has connect() configure the virtualisers with a client for each of `copiers` that no
+    /// PD is on the other end of, for a pager to give to the processes it forks. Each copier
+    /// copies received packets to one spare, as it would for a client.
+    pub fn addSpareClients(system: *Net, copiers: []const *Pd) Error!void {
+        if (system.maybe_vswitch != null) {
+            log.err("spare net clients are not supported with a vswitch", .{});
+            return Error.InvalidSpare;
+        }
+        for (copiers) |new_copier| {
+            for (system.copiers.items) |maybe_existing_copier| {
+                if (maybe_existing_copier) |existing_copier| {
+                    if (std.mem.eql(u8, existing_copier.name, new_copier.name)) {
+                        return Error.DuplicateCopier;
+                    }
+                }
+            }
+            for (system.spare_copiers.items) |existing_copier| {
+                if (std.mem.eql(u8, existing_copier.name, new_copier.name)) {
+                    return Error.DuplicateCopier;
+                }
+            }
+            system.spare_copiers.append(new_copier) catch @panic("OOM");
+            system.spare_copy_configs.append(std.mem.zeroInit(ConfigResources.Net.Copy, .{})) catch @panic("OOM");
+        }
+    }
+
     pub fn addAclRule(system: *Net, client0: *Pd, client1: *Pd, zeroToOne: bool, oneToZero: bool) Error!void {
         // System must have a vswitch
         if (system.maybe_vswitch == null) {
@@ -346,6 +400,106 @@ pub const Net = struct {
         }
     }
 
+    /// The server end of a connection's queues, whose client end is left for whoever is given
+    /// the spare to map. Returns the free and then the active queue, in small pages so that
+    /// they can be mapped a frame at a time.
+    fn createSpareConnection(system: *Net, server: *Pd, name: []const u8, server_conn: *ConfigResources.Net.Connection, num_buffers: u64) [2]Mr {
+        const rounded_num_buffers = std.math.ceilPowerOfTwo(u32, @intCast(num_buffers)) catch unreachable;
+        const queue_mr_size = system.sdf.arch.roundUpToPage(8 + 16 * rounded_num_buffers);
+        server_conn.num_buffers = @intCast(rounded_num_buffers);
+
+        const free_mr_name = fmt(system.allocator, "{s}/net/queue/{s}/{s}/free", .{ system.deviceName(), server.name, name });
+        const free_mr = Mr.create(system.allocator, free_mr_name, queue_mr_size, .{ .page_size = .small });
+        system.sdf.addMemoryRegion(free_mr);
+        const free_mr_server_map = Map.create(free_mr, server.getMapVaddr(&free_mr), .rw, .{});
+        server.addMap(free_mr_server_map);
+        server_conn.free_queue = .createFromMap(free_mr_server_map);
+
+        const active_mr_name = fmt(system.allocator, "{s}/net/queue/{s}/{s}/active", .{ system.deviceName(), server.name, name });
+        const active_mr = Mr.create(system.allocator, active_mr_name, queue_mr_size, .{ .page_size = .small });
+        system.sdf.addMemoryRegion(active_mr);
+        const active_mr_server_map = Map.create(active_mr, server.getMapVaddr(&active_mr), .rw, .{});
+        server.addMap(active_mr_server_map);
+        server_conn.active_queue = .createFromMap(active_mr_server_map);
+
+        server_conn.id = Pd.allocateId(&server.channel_ids, null) catch @panic("could not reserve a channel for a spare net client");
+
+        return .{ free_mr, active_mr };
+    }
+
+    fn spareConnect(system: *Net, rx_dma_mr: Mr, spare_idx: usize) void {
+        const defaults: ClientOptions = .{};
+        const name = fmt(system.allocator, "fork{}", .{spare_idx});
+        const copier = system.spare_copiers.items[spare_idx];
+        var copier_config = &system.spare_copy_configs.items[spare_idx];
+        var spare: Spare = undefined;
+        spare.copier = copier;
+
+        // Rx, through the spare's copier
+        const virt_rx_client = &system.virt_rx_config.clients[system.virt_rx_config.num_clients];
+        system.createConnection(system.virt_rx, copier, &virt_rx_client.conn, &copier_config.rx, system.rx_buffers, false);
+        const rx_dma_copier_map = Map.create(rx_dma_mr, copier.getMapVaddr(&rx_dma_mr), .rw, .{});
+        copier.addMap(rx_dma_copier_map);
+        copier_config.rx_data[0] = .createFromMap(rx_dma_copier_map);
+
+        const rx_queues = system.createSpareConnection(copier, name, &copier_config.client, defaults.rx_buffers);
+        spare.rx_id = copier_config.client.id;
+
+        const client_data_mr_size = system.sdf.arch.roundUpToPage(system.rx_buffers * BUFFER_SIZE);
+        const client_data_mr_name = fmt(system.allocator, "{s}/net/rx/data/client/{s}", .{ system.deviceName(), name });
+        const client_data_mr = Mr.create(system.allocator, client_data_mr_name, client_data_mr_size, .{ .page_size = .small });
+        system.sdf.addMemoryRegion(client_data_mr);
+        const client_data_copier_map = Map.create(client_data_mr, copier.getMapVaddr(&client_data_mr), .rw, .{});
+        copier.addMap(client_data_copier_map);
+        copier_config.client_data = .createFromMap(client_data_copier_map);
+        spare.rx_mrs = .{ rx_queues[0], rx_queues[1], client_data_mr };
+
+        spare.mac_addr = system.uniqueMacAddr();
+        std.mem.copyForwards(u8, virt_rx_client.mac_addrs[0..6], &spare.mac_addr);
+        virt_rx_client.num_macs = 1;
+        system.virt_rx_config.num_clients += 1;
+
+        // Tx
+        const virt_tx_client = &system.virt_tx_config.clients[system.virt_tx_config.num_clients];
+        const tx_queues = system.createSpareConnection(system.virt_tx, name, &virt_tx_client.conn, defaults.tx_buffers);
+        spare.tx_id = virt_tx_client.conn.id;
+
+        const data_mr_size = system.sdf.arch.roundUpToPage(defaults.tx_buffers * BUFFER_SIZE);
+        const data_mr_name = fmt(system.allocator, "{s}/net/tx/data/client/{s}", .{ system.deviceName(), name });
+        const data_mr = Mr.physical(system.allocator, system.sdf, data_mr_name, data_mr_size, .{ .page_size = .small });
+        system.sdf.addMemoryRegion(data_mr);
+        const data_mr_virt_map = Map.create(data_mr, system.virt_tx.getMapVaddr(&data_mr), .r, .{});
+        system.virt_tx.addMap(data_mr_virt_map);
+        virt_tx_client.regions[0].data = .createFromMap(data_mr_virt_map);
+        virt_tx_client.regions[0].num_buffers = @intCast(defaults.tx_buffers);
+        virt_tx_client.num_regions = 1;
+        spare.tx_mrs = .{ tx_queues[0], tx_queues[1], data_mr };
+        system.virt_tx_config.num_clients += 1;
+
+        system.spares.append(spare) catch @panic("OOM");
+    }
+
+    /// A locally administered address no client or spare has yet.
+    fn uniqueMacAddr(system: *Net) [6]u8 {
+        const rand = std.crypto.random;
+        var mac_addr: [6]u8 = undefined;
+        while (true) {
+            rand.bytes(&mac_addr);
+            mac_addr[0] |= (1 << 1);
+            mac_addr[0] &= 0b11111110;
+            var unique = true;
+            for (system.client_info.items) |client_info| {
+                if (client_info.mac_addr) |b| {
+                    if (std.mem.eql(u8, &mac_addr, &b)) unique = false;
+                }
+            }
+            for (system.spares.items) |spare| {
+                if (std.mem.eql(u8, &mac_addr, &spare.mac_addr)) unique = false;
+            }
+            if (unique) return mac_addr;
+        }
+    }
+
     fn rxConnectDriver(system: *Net) Mr {
         system.createConnection(system.driver, system.virt_rx, &system.driver_config.virt_rx, &system.virt_rx_config.driver, system.rx_buffers, false);
 
@@ -380,6 +534,8 @@ pub const Net = struct {
                 num_buffers += client_info.tx_buffers;
             }
         }
+        const defaults: ClientOptions = .{};
+        num_buffers += system.spare_copiers.items.len * defaults.tx_buffers;
 
         system.createConnection(system.driver, system.virt_tx, &system.driver_config.virt_tx, &system.virt_tx_config.driver, num_buffers, false);
     }
@@ -653,6 +809,10 @@ pub const Net = struct {
             system.client_configs.items[i].mac_addr = system.client_info.items[i].mac_addr.?;
         }
 
+        for (0..system.spare_copiers.items.len) |i| {
+            system.spareConnect(rx_dma_mr, i);
+        }
+
         if (system.maybe_vswitch != null) {
             system.vswitchRxConnect(rx_dma_mr, num_vswitch_client_buffers + system.rx_buffers);
             system.vswitchTxConnect(num_vswitch_client_buffers);
@@ -683,6 +843,11 @@ pub const Net = struct {
                 const data_name = fmt(allocator, "net_copy_{s}", .{copier.name});
                 try data.serialize(allocator, system.copy_configs.items[i], prefix, data_name);
             }
+        }
+
+        for (system.spare_copiers.items, 0..) |copier, i| {
+            const data_name = fmt(allocator, "net_copy_{s}", .{copier.name});
+            try data.serialize(allocator, system.spare_copy_configs.items[i], prefix, data_name);
         }
 
         for (system.clients.items, 0..) |client, i| {

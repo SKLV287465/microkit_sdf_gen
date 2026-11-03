@@ -433,6 +433,10 @@ pub const SystemDescription = struct {
         cnode_name: ?[]const u8,
         pd: ?[]const u8,
         core: ?u8,
+        /// For "frames", the memory region whose frames are given.
+        mr: ?[]const u8 = null,
+        /// The user CNode the cap goes in, instead of the PD's root CNode.
+        dest_cnode: ?[]const u8 = null,
         dest_cspace_slot: u64,
 
         pub fn create(allocator: Allocator, cap_type: []const u8, cnode_name: ?[]const u8, pd: ?[]const u8, dest_cspace_slot: u64) CapMap {
@@ -466,9 +470,28 @@ pub const SystemDescription = struct {
             };
         }
 
+        /// A cap placed in slot `dest_slot` of the user CNode `dest_cnode`, rather than in the
+        /// PD's root CNode. `source` is a PD name, or a memory region name for "frames".
+        pub fn createInCNode(allocator: Allocator, cap_type: []const u8, source: []const u8, dest_cnode: []const u8, dest_slot: u64) CapMap {
+            const is_frames = std.mem.eql(u8, cap_type, "frames");
+            const dupe_source = allocator.dupe(u8, source) catch @panic("Could not dupe cap source");
+            return CapMap{
+                .allocator = allocator,
+                .cap_type = allocator.dupe(u8, cap_type) catch @panic("Could not dupe cap type"),
+                .cnode_name = null,
+                .pd = if (is_frames) null else dupe_source,
+                .core = null,
+                .mr = if (is_frames) dupe_source else null,
+                .dest_cnode = allocator.dupe(u8, dest_cnode) catch @panic("Could not dupe CNode name"),
+                .dest_cspace_slot = dest_slot,
+            };
+        }
+
         pub fn destroy(cap_map: *CapMap) void {
             cap_map.allocator.free(cap_map.cap_type);
             cap_map.allocator.free(cap_map.pd);
+            if (cap_map.mr) |mr| cap_map.allocator.free(mr);
+            if (cap_map.dest_cnode) |dest_cnode| cap_map.allocator.free(dest_cnode);
         }
 
         pub fn render(cap_map: *const CapMap, writer: ArrayList(u8).Writer, separator: []const u8) !void {
@@ -484,6 +507,14 @@ pub const SystemDescription = struct {
 
             if (cap_map.core) |core| {
                 try std.fmt.format(writer, " core=\"{}\"", .{core});
+            }
+
+            if (cap_map.mr) |mr| {
+                try std.fmt.format(writer, " mr=\"{s}\"", .{mr});
+            }
+
+            if (cap_map.dest_cnode) |dest_cnode| {
+                try std.fmt.format(writer, " dest_cnode=\"{s}\"", .{dest_cnode});
             }
 
             _ = try writer.write(" />\n");

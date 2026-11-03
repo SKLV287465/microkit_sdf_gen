@@ -1270,13 +1270,33 @@ export fn sdfgen_sddf_lwip_serialise_config(c_lib: *align(8) anyopaque, output_d
     return true;
 }
 
-export fn sdfgen_lionsos_pager(c_sdf: *align(8) anyopaque, c_pager: *align(8) anyopaque) ?*anyopaque {
+export fn sdfgen_lionsos_pager(c_sdf: *align(8) anyopaque, c_pager: *align(8) anyopaque, fork_slots: u8) ?*anyopaque {
     const sdf: *SystemDescription = @ptrCast(c_sdf);
     const pager_pd: *Pd = @ptrCast(c_pager);
     const pager = allocator.create(lionsos.Pager) catch @panic("OOM");
-    pager.* = lionsos.Pager.init(allocator, sdf, pager_pd, .{});
+    pager.* = lionsos.Pager.init(allocator, sdf, pager_pd, .{ .fork_slots = fork_slots });
 
     return pager;
+}
+
+export fn sdfgen_lionsos_pager_add_serial(system: *align(8) anyopaque, serial: *align(8) anyopaque) void {
+    const pager: *lionsos.Pager = @ptrCast(system);
+    pager.addSerial(@ptrCast(serial));
+}
+
+export fn sdfgen_lionsos_pager_add_net(system: *align(8) anyopaque, net: *align(8) anyopaque, c_copiers: [*c]*align(8) anyopaque, num_copiers: u8) bool {
+    const pager: *lionsos.Pager = @ptrCast(system);
+    const copiers = allocator.alloc(*Pd, num_copiers) catch @panic("OOM");
+    defer allocator.free(copiers);
+    for (0..num_copiers) |i| {
+        copiers[i] = @ptrCast(c_copiers[i]);
+    }
+    pager.addNet(@ptrCast(net), copiers) catch |e| {
+        log.err("failed to add net to pager '{s}': {any}", .{ pager.pager.name, e });
+        return false;
+    };
+
+    return true;
 }
 
 export fn sdfgen_lionsos_pager_destroy(system: *align(8) anyopaque) void {
@@ -1293,7 +1313,7 @@ export fn sdfgen_lionsos_pager_add_client(system: *align(8) anyopaque, client: *
             error.InvalidClient => return 2,
             error.TooManyClients => return 3,
             // Should never happen when adding a client
-            error.NotConnected => @panic("internal error"),
+            error.NotConnected, error.InvalidSpare, error.TooManySpares => @panic("internal error"),
         }
     };
 

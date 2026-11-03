@@ -407,6 +407,48 @@ pub const Resources = struct {
             size_bits: u8,
         };
 
+        /// The connections a forked process is given its own copy of. Must match the
+        /// PAGER_CONN_* values in lions/pager/config.h.
+        pub const ConnKind = enum(u8) {
+            serial_tx = 0,
+            serial_rx = 1,
+            net_tx = 2,
+            net_rx = 3,
+        };
+        /// Must match PAGER_MAX_* in lions/pager/config.h.
+        pub const MaxConnRegions = 3;
+        pub const MaxClientConns = 4;
+        pub const MaxPeers = 16;
+        pub const MaxSpares = 32;
+
+        /// A connection a client has, which a process forked from it gets a spare copy of.
+        pub const ConnTemplate = extern struct {
+            kind: u8,
+            /// The channel the client, and every process forked from it, signals the peer on.
+            client_id: u8,
+            num_regions: u8,
+            /// Where the client maps the connection's regions, in the order its config
+            /// lists them.
+            regions: [MaxConnRegions]Region,
+        };
+
+        /// A connection the peer was configured with at build time that no PD is on the
+        /// other end of, for the pager to give to a forked process.
+        pub const Spare = extern struct {
+            kind: u8,
+            /// Index of the peer PD. Caps to its Microkit CNode and notification are in
+            /// pager_caps, see PAGER_PEER_*_SLOT.
+            peer: u8,
+            /// The channel the peer signals this connection on.
+            peer_id: u8,
+            num_regions: u8,
+            /// For net_rx, the MAC address the virtualiser routes to this connection.
+            mac_addr: [6]u8,
+            /// Where each region's frames start in connection_frames, and how many there are.
+            frames: [MaxConnRegions]u32,
+            num_frames: [MaxConnRegions]u32,
+        };
+
         pub const ClientConnection = extern struct {
             /// PPC channel, pager end
             id: u8,
@@ -415,8 +457,16 @@ pub const Resources = struct {
             /// PPC channel, client end. A process forked from this client runs the same
             /// ELF, so this is the slot of its own CSpace its libc PPCs the pager on.
             client_id: u8,
+            /// The client's scheduling parameters, which the processes forked from it
+            /// inherit.
+            priority: u8,
             mmap_base: u64,
             brk_base: u64,
+            /// In microseconds, as the SDF gives them.
+            budget: u64,
+            period: u64,
+            num_conns: u8,
+            conns: [MaxClientConns]ConnTemplate,
         };
 
         pub const Server = extern struct {
@@ -433,9 +483,14 @@ pub const Resources = struct {
             elf_caps: CNode,
             frame_copies: CNode,
             pager_caps: CNode,
+            /// Frame caps of every spare connection's regions.
+            connection_frames: CNode,
             sched_control: u8,
             num_clients: u8,
             clients: [MaxClients]ClientConnection,
+            num_peers: u8,
+            num_spares: u8,
+            spares: [MaxSpares]Spare,
         };
 
         pub const Client = extern struct {

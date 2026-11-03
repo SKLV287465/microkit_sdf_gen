@@ -284,3 +284,47 @@ test "two VMs" {
 
     try std.testing.expectEqualStrings(expected, output);
 }
+
+test "pager with spare serial and net connections" {
+    // The sDDF and LionsOS systems do not free the names they format.
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var sdf = SystemDescription.create(a, .aarch64, 0x100_000_000);
+
+    var serial_driver = ProtectionDomain.create(a, "serial_driver", "serial_driver.elf", .{ .priority = 100 });
+    var serial_virt_tx = ProtectionDomain.create(a, "serial_virt_tx", "serial_virt_tx.elf", .{ .priority = 99 });
+    var net_driver = ProtectionDomain.create(a, "net_driver", "eth_driver.elf", .{ .priority = 101 });
+    var net_virt_rx = ProtectionDomain.create(a, "net_virt_rx", "network_virt_rx.elf", .{ .priority = 98 });
+    var net_virt_tx = ProtectionDomain.create(a, "net_virt_tx", "network_virt_tx.elf", .{ .priority = 97 });
+    var net_copy = ProtectionDomain.create(a, "net_copy_client", "network_copy.elf", .{ .priority = 96 });
+    var net_copy_fork0 = ProtectionDomain.create(a, "net_copy_fork0", "network_copy_fork0.elf", .{ .priority = 96 });
+    var net_copy_fork1 = ProtectionDomain.create(a, "net_copy_fork1", "network_copy_fork1.elf", .{ .priority = 96 });
+    var pager = ProtectionDomain.create(a, "pager", "pager.elf", .{ .priority = 198 });
+    var client = ProtectionDomain.create(a, "client", "client.elf", .{ .priority = 1 });
+
+    var serial = try mod.sddf.Serial.init(a, &sdf, null, &serial_driver, &serial_virt_tx, .{});
+    var net = mod.sddf.Net.init(a, &sdf, null, &net_driver, &net_virt_tx, &net_virt_rx, null, .{});
+    var pager_system = mod.lionsos.Pager.init(a, &sdf, &pager, .{ .fork_slots = 2 });
+
+    try pager_system.addClient(&client);
+    try serial.addClient(&client);
+    try net.addClientWithCopier(&client, &net_copy, .{});
+    pager_system.addSerial(&serial);
+    try pager_system.addNet(&net, &.{ &net_copy_fork0, &net_copy_fork1 });
+
+    for ([_]*ProtectionDomain{ &serial_driver, &serial_virt_tx, &net_driver, &net_virt_rx, &net_virt_tx, &net_copy, &net_copy_fork0, &net_copy_fork1, &pager, &client }) |pd| {
+        sdf.addProtectionDomain(pd);
+    }
+
+    try serial.connect();
+    try net.connect();
+    try pager_system.connect();
+
+    const expected = try readTestFile("pager_spares.system");
+    defer allocator.free(expected);
+    const output = try sdf.render();
+
+    try std.testing.expectEqualStrings(expected, output);
+}

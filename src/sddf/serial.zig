@@ -41,6 +41,21 @@ pub const Serial = struct {
     virt_tx_config: ConfigResources.Serial.VirtTx,
     client_configs: std.array_list.Managed(ConfigResources.Serial.Client),
 
+    num_spares: usize = 0,
+    /// Filled in by connect(), one per addSpareClients().
+    spares: std.array_list.Managed(Spare),
+
+    /// A client connection the virtualisers are configured with at build time that no PD is
+    /// on the other end of, for a pager to give to a process it forks. The regions are in
+    /// the order a client config lists them: queue, then data.
+    pub const Spare = struct {
+        tx_mrs: [2]Mr,
+        /// The channel virt_tx signals this connection on.
+        tx_id: u8,
+        rx_mrs: ?[2]Mr,
+        rx_id: u8,
+    };
+
     pub const Error = SystemError || error{
         InvalidVirt,
         InvalidBeginString,
@@ -99,12 +114,14 @@ pub const Serial = struct {
             .virt_rx_config = std.mem.zeroInit(ConfigResources.Serial.VirtRx, .{}),
             .virt_tx_config = std.mem.zeroInit(ConfigResources.Serial.VirtTx, .{}),
             .client_configs = std.array_list.Managed(ConfigResources.Serial.Client).init(allocator),
+            .spares = std.array_list.Managed(Spare).init(allocator),
         };
     }
 
     pub fn deinit(system: *Serial) void {
         system.clients.deinit();
         system.client_configs.deinit();
+        system.spares.deinit();
         system.allocator.free(system.begin_str);
     }
 
@@ -119,7 +136,13 @@ pub const Serial = struct {
         system.client_configs.append(std.mem.zeroInit(ConfigResources.Serial.Client, .{})) catch @panic("Could not add client to Serial");
     }
 
-    fn hasRx(system: *Serial) bool {
+    /// Has connect() configure the virtualisers with `num` more clients than were added, for
+    /// a pager to give to the processes it forks.
+    pub fn addSpareClients(system: *Serial, num: usize) void {
+        system.num_spares += num;
+    }
+
+    pub fn hasRx(system: *Serial) bool {
         return system.virt_rx != null;
     }
 
@@ -163,6 +186,30 @@ pub const Serial = struct {
         client_conn.id = channel.pd_b_id;
     }
 
+    /// The server end of a connection whose client end is left for whoever is given the spare
+    /// to map. The regions are in small pages, so that they can be mapped a frame at a time.
+    fn createSpareConnection(system: *Serial, server: *Pd, name: []const u8, data_size: usize, server_conn: *ConfigResources.Serial.Connection) [2]Mr {
+        const queue_mr_name = fmt(system.allocator, "{s}/serial/queue/{s}/{s}", .{ system.deviceName(), server.name, name });
+        const queue_mr = Mr.create(system.allocator, queue_mr_name, system.queue_size, .{ .page_size = .small });
+        system.sdf.addMemoryRegion(queue_mr);
+
+        const queue_mr_server_map = Map.create(queue_mr, server.getMapVaddr(&queue_mr), .rw, .{});
+        server.addMap(queue_mr_server_map);
+        server_conn.queue = .createFromMap(queue_mr_server_map);
+
+        const data_mr_name = fmt(system.allocator, "{s}/serial/data/{s}/{s}", .{ system.deviceName(), server.name, name });
+        const data_mr = Mr.create(system.allocator, data_mr_name, data_size, .{ .page_size = .small });
+        system.sdf.addMemoryRegion(data_mr);
+
+        const data_mr_server_map = Map.create(data_mr, server.getMapVaddr(&data_mr), .rw, .{});
+        server.addMap(data_mr_server_map);
+        server_conn.data = .createFromMap(data_mr_server_map);
+
+        server_conn.id = Pd.allocateId(&server.channel_ids, null) catch @panic("could not reserve a channel for a spare serial client");
+
+        return .{ queue_mr, data_mr };
+    }
+
     pub fn connect(system: *Serial) !void {
         if (system.device) |dtb_node| {
             try sddf.createDriver(system.sdf, system.driver, dtb_node, .serial, &system.device_res);
@@ -173,7 +220,7 @@ pub const Serial = struct {
         if (system.hasRx()) {
             system.createConnection(system.driver, system.virt_rx.?, system.data_size, &system.driver_config.rx, &system.virt_rx_config.driver);
 
-            system.virt_rx_config.num_clients = @intCast(system.clients.items.len);
+            system.virt_rx_config.num_clients = @intCast(system.clients.items.len + system.num_spares);
             for (system.clients.items, 0..) |client, i| {
                 system.createConnection(system.virt_rx.?, client, system.data_size, &system.virt_rx_config.clients[i], &system.client_configs.items[i].rx);
             }
@@ -192,7 +239,7 @@ pub const Serial = struct {
         }
         system.createConnection(system.driver, system.virt_tx, driver_data_size, &system.driver_config.tx, &system.virt_tx_config.driver);
 
-        system.virt_tx_config.num_clients = @intCast(system.clients.items.len);
+        system.virt_tx_config.num_clients = @intCast(system.clients.items.len + system.num_spares);
         for (system.clients.items, 0..) |client, i| {
             // assuming name is null-terminated
             @memcpy(system.virt_tx_config.clients[i].name[0..client.name.len], client.name);
@@ -200,6 +247,23 @@ pub const Serial = struct {
             std.debug.assert(system.virt_tx_config.clients[i].name[client.name.len] == 0);
 
             system.createConnection(system.virt_tx, client, system.data_size, &system.virt_tx_config.clients[i].conn, &system.client_configs.items[i].tx);
+        }
+
+        for (0..system.num_spares) |i| {
+            const name = fmt(system.allocator, "fork{}", .{i});
+            const virt_idx = system.clients.items.len + i;
+            @memcpy(system.virt_tx_config.clients[virt_idx].name[0..name.len], name);
+
+            var spare: Spare = undefined;
+            spare.tx_mrs = system.createSpareConnection(system.virt_tx, name, system.data_size, &system.virt_tx_config.clients[virt_idx].conn);
+            spare.tx_id = system.virt_tx_config.clients[virt_idx].conn.id;
+            spare.rx_mrs = null;
+            spare.rx_id = 0;
+            if (system.hasRx()) {
+                spare.rx_mrs = system.createSpareConnection(system.virt_rx.?, name, system.data_size, &system.virt_rx_config.clients[virt_idx]);
+                spare.rx_id = system.virt_rx_config.clients[virt_idx].id;
+            }
+            system.spares.append(spare) catch @panic("OOM");
         }
 
         system.virt_tx_config.enable_colour = @intFromBool(system.enable_color);

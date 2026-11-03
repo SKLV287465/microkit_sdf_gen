@@ -325,7 +325,11 @@ libsdfgen.sdfgen_vmm_serialise_config.restype = c_bool
 libsdfgen.sdfgen_vmm_serialise_config.argtypes = [c_void_p, c_char_p]
 
 libsdfgen.sdfgen_lionsos_pager.restype = c_void_p
-libsdfgen.sdfgen_lionsos_pager.argtypes = [c_void_p, c_void_p]
+libsdfgen.sdfgen_lionsos_pager.argtypes = [c_void_p, c_void_p, c_uint8]
+libsdfgen.sdfgen_lionsos_pager_add_serial.restype = None
+libsdfgen.sdfgen_lionsos_pager_add_serial.argtypes = [c_void_p, c_void_p]
+libsdfgen.sdfgen_lionsos_pager_add_net.restype = c_bool
+libsdfgen.sdfgen_lionsos_pager_add_net.argtypes = [c_void_p, c_void_p, POINTER(c_void_p), c_uint8]
 libsdfgen.sdfgen_lionsos_pager_destroy.restype = None
 libsdfgen.sdfgen_lionsos_pager_destroy.argtypes = [c_void_p]
 libsdfgen.sdfgen_lionsos_pager_add_client.restype = c_uint32
@@ -1580,10 +1584,34 @@ class LionsOs:
             self,
             sdf: SystemDescription,
             pager: SystemDescription.ProtectionDomain,
+            fork_slots: int = 2,
         ):
-            self._obj = libsdfgen.sdfgen_lionsos_pager(sdf._obj, pager._obj)
+            """
+            :param fork_slots: how many spare connections to each system given with
+                add_serial()/add_net() there are for forked processes to take.
+            """
+            self._obj = libsdfgen.sdfgen_lionsos_pager(sdf._obj, pager._obj, fork_slots)
             if self._obj is None:
                 raise Exception("failed to create pager")
+
+        def add_serial(self, serial: Sddf.Serial):
+            """
+            Gives each process forked from a client of serial a spare serial connection.
+            Call before serial.connect(), and connect the pager after serial.
+            """
+            libsdfgen.sdfgen_lionsos_pager_add_serial(self._obj, serial._obj)
+
+        def add_net(self, net: Sddf.Net, copiers: List[SystemDescription.ProtectionDomain]):
+            """
+            Gives each process forked from a client of net a spare net connection, with one
+            of copiers copying its received packets. There must be one copier per fork slot,
+            and each must be added to the system like any other PD. Call before
+            net.connect(), and connect the pager after net.
+            """
+            c_copiers = (c_void_p * len(copiers))(*[copier._obj for copier in copiers])
+            if not libsdfgen.sdfgen_lionsos_pager_add_net(self._obj, net._obj, c_copiers,
+                                                         len(copiers)):
+                raise Exception("failed to add net to pager")
 
         def add_client(self, client: SystemDescription.ProtectionDomain):
             ret = libsdfgen.sdfgen_lionsos_pager_add_client(self._obj, client._obj)

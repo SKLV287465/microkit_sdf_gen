@@ -393,13 +393,17 @@ pub const Pager = struct {
     mmap_base: u64,
     brk_base: u64,
     sched_control_core: ?u8,
+    fork_slots: u8,
+    /// The systems whose clients' forks the pager connects to spare connections.
+    serial: ?*Serial = null,
+    net: ?*Net = null,
     connected: bool = false,
     serialised: bool = false,
 
     server_config: ConfigResources.Pager.Server,
     client_configs: std.array_list.Managed(ConfigResources.Pager.Client),
 
-    const Error = sddf.SystemError || error{TooManyClients};
+    const Error = sddf.SystemError || error{ TooManyClients, InvalidSpare, TooManySpares };
 
     /// The CNodes the pager receives the caps it creates at runtime into, as
     /// (name, root CSpace slot, size_bits, post_capdl_untypeds). Slot 0 is reserved for
@@ -419,18 +423,30 @@ pub const Pager = struct {
         .{ .name = "paging_structures", .slot = 3, .size_bits = 20, .post_capdl_untypeds = false },
         // Copies of the global zero page cap, one per read-only mapping.
         .{ .name = "zero_page_copies", .slot = 4, .size_bits = 20, .post_capdl_untypeds = false },
-        // Per-process CSpaces created by fork().
-        .{ .name = "process_cspaces", .slot = 5, .size_bits = 5, .post_capdl_untypeds = false },
+        // What fork() creates for each process, in a fixed block of slots per process.
+        .{ .name = "process_cspaces", .slot = 5, .size_bits = 7, .post_capdl_untypeds = false },
         // The clients' ELF frames, populated by the Microkit tool.
         .{ .name = "elf_caps", .slot = 6, .size_bits = 12, .post_capdl_untypeds = false },
         // Copies of frame caps. A frame cap carries its own mapping, so a folio mapped
         // into more than one VSpace needs a cap per mapping.
         .{ .name = "frame_copies", .slot = 7, .size_bits = 20, .post_capdl_untypeds = false },
         // Caps the Microkit tool hands the pager for the processes it creates at runtime,
-        // starting with a copy of its own endpoint at PAGER_SELF_EP_SLOT. Slot 0 of every
+        // starting with a copy of its own endpoint at PAGER_SELF_EP_SLOT, then caps to each
+        // peer's Microkit CNode and notification (see peerCNodeSlot()). Slot 0 of every
         // CNode here is its self-reference.
-        .{ .name = "pager_caps", .slot = 8, .size_bits = 5, .post_capdl_untypeds = false },
+        .{ .name = "pager_caps", .slot = 8, .size_bits = 6, .post_capdl_untypeds = false },
+        // Frame caps of every spare connection's regions.
+        .{ .name = "connection_frames", .slot = 10, .size_bits = 13, .post_capdl_untypeds = false },
     };
+
+    /// Where the caps to a peer -- a PD a forked process is connected to -- go in pager_caps.
+    /// Must match PAGER_PEER_*_SLOT in lions/pager/config.h, which also reserves slot 2.
+    fn peerCNodeSlot(peer: usize) u64 {
+        return 4 + 2 * peer;
+    }
+    fn peerNtfnSlot(peer: usize) u64 {
+        return 5 + 2 * peer;
+    }
 
     const sched_control_slot = 9;
 
@@ -442,6 +458,9 @@ pub const Pager = struct {
         mmap_base: u64 = 0x8000000000,
         brk_base: u64 = 0x7000000000,
         sched_control_core: ?u8 = 0,
+        /// How many spare connections to each system added with addSerial()/addNet() there
+        /// are for forked processes to take.
+        fork_slots: u8 = 2,
     };
 
     pub fn init(allocator: Allocator, sdf: *SystemDescription, pager: *Pd, options: Options) Pager {
@@ -455,6 +474,7 @@ pub const Pager = struct {
             .mmap_base = options.mmap_base,
             .brk_base = options.brk_base,
             .sched_control_core = options.sched_control_core,
+            .fork_slots = options.fork_slots,
             .server_config = std.mem.zeroInit(ConfigResources.Pager.Server, .{}),
             .client_configs = std.array_list.Managed(ConfigResources.Pager.Client).init(allocator),
         };
@@ -486,6 +506,146 @@ pub const Pager = struct {
 
         system.clients.append(client) catch @panic("Could not add client to Pager");
         system.client_configs.append(std.mem.zeroInit(ConfigResources.Pager.Client, .{})) catch @panic("Could not add client config to Pager");
+    }
+
+    /// Gives the processes forked from clients of `serial` a spare serial connection each.
+    /// Must be called before `serial` is connected, and the pager connected after it.
+    pub fn addSerial(system: *Pager, serial: *Serial) void {
+        serial.addSpareClients(system.fork_slots);
+        system.serial = serial;
+    }
+
+    /// Gives the processes forked from clients of `net` a spare net connection each, with
+    /// one of `copiers` copying its received packets. There must be one copier per fork
+    /// slot. Must be called before `net` is connected, and the pager connected after it.
+    pub fn addNet(system: *Pager, net: *Net, copiers: []const *Pd) !void {
+        if (copiers.len != system.fork_slots) {
+            log.err("pager '{s}' has {} fork slots but was given {} net copiers", .{ system.pager.name, system.fork_slots, copiers.len });
+            return Error.InvalidSpare;
+        }
+        try net.addSpareClients(copiers);
+        system.net = net;
+    }
+
+    fn indexOfPd(pds: []const *Pd, pd: *const Pd) ?usize {
+        for (pds, 0..) |other, i| {
+            if (std.mem.eql(u8, other.name, pd.name)) return i;
+        }
+        return null;
+    }
+
+    fn addConnTemplate(client: *ConfigResources.Pager.ClientConnection, kind: ConfigResources.Pager.ConnKind, client_id: u8, regions: []const ConfigResources.Region) void {
+        var conn = &client.conns[client.num_conns];
+        conn.kind = @intFromEnum(kind);
+        conn.client_id = client_id;
+        conn.num_regions = @intCast(regions.len);
+        for (regions, 0..) |region, i| conn.regions[i] = region;
+        client.num_conns += 1;
+    }
+
+    /// Records the connections each client has, for its forks to get a spare copy of.
+    fn connectTemplates(system: *Pager) void {
+        for (system.clients.items, 0..) |client, i| {
+            const pager_client = &system.server_config.clients[i];
+            if (system.serial) |serial| {
+                if (indexOfPd(serial.clients.items, client)) |j| {
+                    const config = serial.client_configs.items[j];
+                    addConnTemplate(pager_client, .serial_tx, config.tx.id, &.{ config.tx.queue, config.tx.data });
+                    if (serial.hasRx()) {
+                        addConnTemplate(pager_client, .serial_rx, config.rx.id, &.{ config.rx.queue, config.rx.data });
+                    }
+                }
+            }
+            if (system.net) |net| {
+                if (indexOfPd(net.clients.items, client)) |j| {
+                    const config = net.client_configs.items[j];
+                    const info = net.client_info.items[j];
+                    if (info.tx) {
+                        addConnTemplate(pager_client, .net_tx, config.tx.id, &.{ config.tx.free_queue, config.tx.active_queue, config.tx_data });
+                    }
+                    // A spare receives through a copier, so only a client with one can be
+                    // given a spare in its place.
+                    if (info.rx and net.copiers.items[j] != null) {
+                        addConnTemplate(pager_client, .net_rx, config.rx.id, &.{ config.rx.free_queue, config.rx.active_queue, config.rx_data });
+                    }
+                }
+            }
+        }
+    }
+
+    const SpareBuilder = struct {
+        system: *Pager,
+        peers: std.array_list.Managed(*Pd),
+        next_frame: u64 = 1,
+
+        fn peerIndex(builder: *SpareBuilder, peer: *Pd) Error!u8 {
+            if (indexOfPd(builder.peers.items, peer)) |i| return @intCast(i);
+            if (builder.peers.items.len == ConfigResources.Pager.MaxPeers) return Error.TooManySpares;
+            builder.peers.append(peer) catch @panic("OOM");
+            return @intCast(builder.peers.items.len - 1);
+        }
+
+        fn add(builder: *SpareBuilder, kind: ConfigResources.Pager.ConnKind, peer: *Pd, peer_id: u8, mrs: []const Mr, mac_addr: [6]u8) Error!void {
+            const system = builder.system;
+            const config = &system.server_config;
+            if (config.num_spares == ConfigResources.Pager.MaxSpares) return Error.TooManySpares;
+            var spare = &config.spares[config.num_spares];
+            spare.kind = @intFromEnum(kind);
+            spare.peer = try builder.peerIndex(peer);
+            spare.peer_id = peer_id;
+            spare.num_regions = @intCast(mrs.len);
+            spare.mac_addr = mac_addr;
+            const page_size = Mr.PageSize.small.toInt(system.sdf.arch);
+            for (mrs, 0..) |mr, i| {
+                const num_frames = mr.size / page_size;
+                system.pager.addCapMap(SystemDescription.CapMap.createInCNode(system.allocator, "frames", mr.name, "connection_frames", builder.next_frame));
+                spare.frames[i] = @intCast(builder.next_frame);
+                spare.num_frames[i] = @intCast(num_frames);
+                builder.next_frame += num_frames;
+            }
+            config.num_spares += 1;
+        }
+    };
+
+    /// Hands the pager the spare connections of the systems added with addSerial() and
+    /// addNet(): the frames of each, and caps to the Microkit CNode and notification of
+    /// each PD on the other end, its peer.
+    fn connectSpares(system: *Pager) Error!void {
+        var builder: SpareBuilder = .{
+            .system = system,
+            .peers = std.array_list.Managed(*Pd).init(system.allocator),
+        };
+        defer builder.peers.deinit();
+        const no_mac = std.mem.zeroes([6]u8);
+
+        if (system.serial) |serial| {
+            if (!serial.connected) return Error.NotConnected;
+            for (serial.spares.items) |spare| {
+                try builder.add(.serial_tx, serial.virt_tx, spare.tx_id, &spare.tx_mrs, no_mac);
+                if (spare.rx_mrs) |rx_mrs| {
+                    try builder.add(.serial_rx, serial.virt_rx.?, spare.rx_id, &rx_mrs, no_mac);
+                }
+            }
+        }
+        if (system.net) |net| {
+            if (!net.connected) return Error.NotConnected;
+            for (net.spares.items) |spare| {
+                try builder.add(.net_tx, net.virt_tx, spare.tx_id, &spare.tx_mrs, no_mac);
+                try builder.add(.net_rx, spare.copier, spare.rx_id, &spare.rx_mrs, spare.mac_addr);
+            }
+        }
+
+        const frames_slots = @as(u64, 1) << @intCast(system.server_config.connection_frames.size_bits);
+        if (builder.next_frame > frames_slots) {
+            log.err("pager '{s}': the spare connections need {} frame slots, connection_frames has {}", .{ system.pager.name, builder.next_frame, frames_slots });
+            return Error.TooManySpares;
+        }
+
+        for (builder.peers.items, 0..) |peer, i| {
+            system.pager.addCapMap(SystemDescription.CapMap.createInCNode(system.allocator, "microkit_cnode", peer.name, "pager_caps", peerCNodeSlot(i)));
+            system.pager.addCapMap(SystemDescription.CapMap.createInCNode(system.allocator, "notification", peer.name, "pager_caps", peerNtfnSlot(i)));
+        }
+        system.server_config.num_peers = @intCast(builder.peers.items.len);
     }
 
     pub fn connect(system: *Pager) !void {
@@ -534,12 +694,20 @@ pub const Pager = struct {
             // can use what fault() hands it to index its per-client state directly.
             const fault_id = try pager.addFaultClient(client, @intCast(i));
 
+            // Resolved the way the Microkit tool resolves them, since the pager
+            // configures each forked process' scheduling context itself.
+            const budget: u64 = client.budget orelse 1000;
             system.server_config.clients[i] = .{
                 .id = ch.pd_a_id,
                 .fault_id = fault_id,
                 .client_id = ch.pd_b_id,
+                .priority = client.priority orelse 0,
                 .mmap_base = system.mmap_base,
                 .brk_base = system.brk_base,
+                .budget = budget,
+                .period = client.period orelse budget,
+                .num_conns = 0,
+                .conns = std.mem.zeroes([ConfigResources.Pager.MaxClientConns]ConfigResources.Pager.ConnTemplate),
             };
             system.client_configs.items[i] = .{
                 .id = ch.pd_b_id,
@@ -548,6 +716,9 @@ pub const Pager = struct {
             };
         }
         system.server_config.num_clients = @intCast(system.clients.items.len);
+
+        system.connectTemplates();
+        try system.connectSpares();
 
         system.connected = true;
     }

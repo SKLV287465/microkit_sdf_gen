@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<system>
+    <memory_region name="generic/serial/queue/serial_driver/serial_virt_tx" size="0x1000" />
+    <memory_region name="generic/serial/data/serial_driver/serial_virt_tx" size="0x20000" />
+    <memory_region name="generic/serial/queue/serial_virt_tx/client" size="0x1000" />
+    <memory_region name="generic/serial/data/serial_virt_tx/client" size="0x10000" />
+    <memory_region name="generic/serial/queue/serial_virt_tx/fork0" size="0x1000" page_size="0x1000" />
+    <memory_region name="generic/serial/data/serial_virt_tx/fork0" size="0x10000" page_size="0x1000" />
+    <memory_region name="generic/serial/queue/serial_virt_tx/fork1" size="0x1000" page_size="0x1000" />
+    <memory_region name="generic/serial/data/serial_virt_tx/fork1" size="0x10000" page_size="0x1000" />
+    <memory_region name="generic/net/queue/net_driver/net_virt_rx/free" size="0x3000" />
+    <memory_region name="generic/net/queue/net_driver/net_virt_rx/active" size="0x3000" />
+    <memory_region name="generic/net/rx/data/device" size="0x100000" phys_addr="0xfff00000" />
+    <memory_region name="generic/net/rx/virt_metadata" size="0x1000" />
+    <memory_region name="generic/net/queue/net_driver/net_virt_tx/free" size="0x9000" />
+    <memory_region name="generic/net/queue/net_driver/net_virt_tx/active" size="0x9000" />
+    <memory_region name="generic/net/queue/net_virt_rx/net_copy_client/free" size="0x3000" />
+    <memory_region name="generic/net/queue/net_virt_rx/net_copy_client/active" size="0x3000" />
+    <memory_region name="generic/net/queue/net_copy_client/client/free" size="0x3000" />
+    <memory_region name="generic/net/queue/net_copy_client/client/active" size="0x3000" />
+    <memory_region name="generic/net/rx/data/client/client" size="0x100000" />
+    <memory_region name="generic/net/queue/net_virt_tx/client/free" size="0x3000" />
+    <memory_region name="generic/net/queue/net_virt_tx/client/active" size="0x3000" />
+    <memory_region name="generic/net/tx/data/client/client" size="0x100000" phys_addr="0xffe00000" />
+    <memory_region name="generic/net/queue/net_virt_rx/net_copy_fork0/free" size="0x3000" />
+    <memory_region name="generic/net/queue/net_virt_rx/net_copy_fork0/active" size="0x3000" />
+    <memory_region name="generic/net/queue/net_copy_fork0/fork0/free" size="0x3000" page_size="0x1000" />
+    <memory_region name="generic/net/queue/net_copy_fork0/fork0/active" size="0x3000" page_size="0x1000" />
+    <memory_region name="generic/net/rx/data/client/fork0" size="0x100000" page_size="0x1000" />
+    <memory_region name="generic/net/queue/net_virt_tx/fork0/free" size="0x3000" page_size="0x1000" />
+    <memory_region name="generic/net/queue/net_virt_tx/fork0/active" size="0x3000" page_size="0x1000" />
+    <memory_region name="generic/net/tx/data/client/fork0" size="0x100000" phys_addr="0xffd00000" page_size="0x1000" />
+    <memory_region name="generic/net/queue/net_virt_rx/net_copy_fork1/free" size="0x3000" />
+    <memory_region name="generic/net/queue/net_virt_rx/net_copy_fork1/active" size="0x3000" />
+    <memory_region name="generic/net/queue/net_copy_fork1/fork1/free" size="0x3000" page_size="0x1000" />
+    <memory_region name="generic/net/queue/net_copy_fork1/fork1/active" size="0x3000" page_size="0x1000" />
+    <memory_region name="generic/net/rx/data/client/fork1" size="0x100000" page_size="0x1000" />
+    <memory_region name="generic/net/queue/net_virt_tx/fork1/free" size="0x3000" page_size="0x1000" />
+    <memory_region name="generic/net/queue/net_virt_tx/fork1/active" size="0x3000" page_size="0x1000" />
+    <memory_region name="generic/net/tx/data/client/fork1" size="0x100000" phys_addr="0xffc00000" page_size="0x1000" />
+    <memory_region name="pager_memory" size="0x2000000" />
+    <memory_region name="pager_bootinfo" size="0x2000" prefill_bootinfo="post_capdl_untypeds" />
+    <cnode name="untypeds" size_bits="9" post_capdl_untypeds="true" />
+    <cnode name="frames" size_bits="20" />
+    <cnode name="paging_structures" size_bits="20" />
+    <cnode name="zero_page_copies" size_bits="20" />
+    <cnode name="process_cspaces" size_bits="7" />
+    <cnode name="elf_caps" size_bits="12" />
+    <cnode name="frame_copies" size_bits="20" />
+    <cnode name="pager_caps" size_bits="6" />
+    <cnode name="connection_frames" size_bits="13" />
+    <protection_domain name="serial_driver" priority="100">
+        <program_image path="serial_driver.elf" />
+        <map mr="generic/serial/queue/serial_driver/serial_virt_tx" vaddr="0x20000000" perms="rw" />
+        <map mr="generic/serial/data/serial_driver/serial_virt_tx" vaddr="0x20001000" perms="rw" />
+    </protection_domain>
+    <protection_domain name="serial_virt_tx" priority="99">
+        <program_image path="serial_virt_tx.elf" />
+        <map mr="generic/serial/queue/serial_driver/serial_virt_tx" vaddr="0x20000000" perms="rw" />
+        <map mr="generic/serial/data/serial_driver/serial_virt_tx" vaddr="0x20001000" perms="rw" />
+        <map mr="generic/serial/queue/serial_virt_tx/client" vaddr="0x20021000" perms="rw" />
+        <map mr="generic/serial/data/serial_virt_tx/client" vaddr="0x20022000" perms="rw" />
+        <map mr="generic/serial/queue/serial_virt_tx/fork0" vaddr="0x20032000" perms="rw" />
+        <map mr="generic/serial/data/serial_virt_tx/fork0" vaddr="0x20033000" perms="rw" />
+        <map mr="generic/serial/queue/serial_virt_tx/fork1" vaddr="0x20043000" perms="rw" />
+        <map mr="generic/serial/data/serial_virt_tx/fork1" vaddr="0x20044000" perms="rw" />
+    </protection_domain>
+    <protection_domain name="net_driver" priority="101">
+        <program_image path="eth_driver.elf" />
+        <map mr="generic/net/queue/net_driver/net_virt_rx/free" vaddr="0x20000000" perms="rw" />
+        <map mr="generic/net/queue/net_driver/net_virt_rx/active" vaddr="0x20003000" perms="rw" />
+        <map mr="generic/net/queue/net_driver/net_virt_tx/free" vaddr="0x20006000" perms="rw" />
+        <map mr="generic/net/queue/net_driver/net_virt_tx/active" vaddr="0x2000f000" perms="rw" />
+    </protection_domain>
+    <protection_domain name="net_virt_rx" priority="98">
+        <program_image path="network_virt_rx.elf" />
+        <map mr="generic/net/queue/net_driver/net_virt_rx/free" vaddr="0x20000000" perms="rw" />
+        <map mr="generic/net/queue/net_driver/net_virt_rx/active" vaddr="0x20003000" perms="rw" />
+        <map mr="generic/net/rx/data/device" vaddr="0x20006000" perms="r" />
+        <map mr="generic/net/rx/virt_metadata" vaddr="0x20106000" perms="rw" />
+        <map mr="generic/net/queue/net_virt_rx/net_copy_client/free" vaddr="0x20107000" perms="rw" />
+        <map mr="generic/net/queue/net_virt_rx/net_copy_client/active" vaddr="0x2010a000" perms="rw" />
+        <map mr="generic/net/queue/net_virt_rx/net_copy_fork0/free" vaddr="0x2010d000" perms="rw" />
+        <map mr="generic/net/queue/net_virt_rx/net_copy_fork0/active" vaddr="0x20110000" perms="rw" />
+        <map mr="generic/net/queue/net_virt_rx/net_copy_fork1/free" vaddr="0x20113000" perms="rw" />
+        <map mr="generic/net/queue/net_virt_rx/net_copy_fork1/active" vaddr="0x20116000" perms="rw" />
+    </protection_domain>
+    <protection_domain name="net_virt_tx" priority="97">
+        <program_image path="network_virt_tx.elf" />
+        <map mr="generic/net/queue/net_driver/net_virt_tx/free" vaddr="0x20000000" perms="rw" />
+        <map mr="generic/net/queue/net_driver/net_virt_tx/active" vaddr="0x20009000" perms="rw" />
+        <map mr="generic/net/queue/net_virt_tx/client/free" vaddr="0x20012000" perms="rw" />
+        <map mr="generic/net/queue/net_virt_tx/client/active" vaddr="0x20015000" perms="rw" />
+        <map mr="generic/net/tx/data/client/client" vaddr="0x20018000" perms="r" />
+        <map mr="generic/net/queue/net_virt_tx/fork0/free" vaddr="0x20118000" perms="rw" />
+        <map mr="generic/net/queue/net_virt_tx/fork0/active" vaddr="0x2011b000" perms="rw" />
+        <map mr="generic/net/tx/data/client/fork0" vaddr="0x2011e000" perms="r" />
+        <map mr="generic/net/queue/net_virt_tx/fork1/free" vaddr="0x2021e000" perms="rw" />
+        <map mr="generic/net/queue/net_virt_tx/fork1/active" vaddr="0x20221000" perms="rw" />
+        <map mr="generic/net/tx/data/client/fork1" vaddr="0x20224000" perms="r" />
+    </protection_domain>
+    <protection_domain name="net_copy_client" priority="96">
+        <program_image path="network_copy.elf" />
+        <map mr="generic/net/queue/net_virt_rx/net_copy_client/free" vaddr="0x20000000" perms="rw" />
+        <map mr="generic/net/queue/net_virt_rx/net_copy_client/active" vaddr="0x20003000" perms="rw" />
+        <map mr="generic/net/queue/net_copy_client/client/free" vaddr="0x20006000" perms="rw" />
+        <map mr="generic/net/queue/net_copy_client/client/active" vaddr="0x20009000" perms="rw" />
+        <map mr="generic/net/rx/data/device" vaddr="0x2000c000" perms="rw" />
+        <map mr="generic/net/rx/data/client/client" vaddr="0x2010c000" perms="rw" />
+    </protection_domain>
+    <protection_domain name="net_copy_fork0" priority="96">
+        <program_image path="network_copy_fork0.elf" />
+        <map mr="generic/net/queue/net_virt_rx/net_copy_fork0/free" vaddr="0x20000000" perms="rw" />
+        <map mr="generic/net/queue/net_virt_rx/net_copy_fork0/active" vaddr="0x20003000" perms="rw" />
+        <map mr="generic/net/rx/data/device" vaddr="0x20006000" perms="rw" />
+        <map mr="generic/net/queue/net_copy_fork0/fork0/free" vaddr="0x20106000" perms="rw" />
+        <map mr="generic/net/queue/net_copy_fork0/fork0/active" vaddr="0x20109000" perms="rw" />
+        <map mr="generic/net/rx/data/client/fork0" vaddr="0x2010c000" perms="rw" />
+    </protection_domain>
+    <protection_domain name="net_copy_fork1" priority="96">
+        <program_image path="network_copy_fork1.elf" />
+        <map mr="generic/net/queue/net_virt_rx/net_copy_fork1/free" vaddr="0x20000000" perms="rw" />
+        <map mr="generic/net/queue/net_virt_rx/net_copy_fork1/active" vaddr="0x20003000" perms="rw" />
+        <map mr="generic/net/rx/data/device" vaddr="0x20006000" perms="rw" />
+        <map mr="generic/net/queue/net_copy_fork1/fork1/free" vaddr="0x20106000" perms="rw" />
+        <map mr="generic/net/queue/net_copy_fork1/fork1/active" vaddr="0x20109000" perms="rw" />
+        <map mr="generic/net/rx/data/client/fork1" vaddr="0x2010c000" perms="rw" />
+    </protection_domain>
+    <protection_domain name="pager" priority="198" self_ep_cnode="pager_caps" elf_caps_cnode="elf_caps">
+        <program_image path="pager.elf" />
+        <map mr="pager_memory" vaddr="0x20000000" perms="rw" />
+        <map mr="pager_bootinfo" vaddr="0x22000000" perms="rw" />
+        <cspace>
+            <cap_cnode slot="1" cnode_name="untypeds" />
+            <cap_cnode slot="2" cnode_name="frames" />
+            <cap_cnode slot="3" cnode_name="paging_structures" />
+            <cap_cnode slot="4" cnode_name="zero_page_copies" />
+            <cap_cnode slot="5" cnode_name="process_cspaces" />
+            <cap_cnode slot="6" cnode_name="elf_caps" />
+            <cap_cnode slot="7" cnode_name="frame_copies" />
+            <cap_cnode slot="8" cnode_name="pager_caps" />
+            <cap_cnode slot="10" cnode_name="connection_frames" />
+            <cap_sched_control slot="9" core="0" />
+            <cap_frames slot="1" mr="generic/serial/queue/serial_virt_tx/fork0" dest_cnode="connection_frames" />
+            <cap_frames slot="2" mr="generic/serial/data/serial_virt_tx/fork0" dest_cnode="connection_frames" />
+            <cap_frames slot="18" mr="generic/serial/queue/serial_virt_tx/fork1" dest_cnode="connection_frames" />
+            <cap_frames slot="19" mr="generic/serial/data/serial_virt_tx/fork1" dest_cnode="connection_frames" />
+            <cap_frames slot="35" mr="generic/net/queue/net_virt_tx/fork0/free" dest_cnode="connection_frames" />
+            <cap_frames slot="38" mr="generic/net/queue/net_virt_tx/fork0/active" dest_cnode="connection_frames" />
+            <cap_frames slot="41" mr="generic/net/tx/data/client/fork0" dest_cnode="connection_frames" />
+            <cap_frames slot="297" mr="generic/net/queue/net_copy_fork0/fork0/free" dest_cnode="connection_frames" />
+            <cap_frames slot="300" mr="generic/net/queue/net_copy_fork0/fork0/active" dest_cnode="connection_frames" />
+            <cap_frames slot="303" mr="generic/net/rx/data/client/fork0" dest_cnode="connection_frames" />
+            <cap_frames slot="559" mr="generic/net/queue/net_virt_tx/fork1/free" dest_cnode="connection_frames" />
+            <cap_frames slot="562" mr="generic/net/queue/net_virt_tx/fork1/active" dest_cnode="connection_frames" />
+            <cap_frames slot="565" mr="generic/net/tx/data/client/fork1" dest_cnode="connection_frames" />
+            <cap_frames slot="821" mr="generic/net/queue/net_copy_fork1/fork1/free" dest_cnode="connection_frames" />
+            <cap_frames slot="824" mr="generic/net/queue/net_copy_fork1/fork1/active" dest_cnode="connection_frames" />
+            <cap_frames slot="827" mr="generic/net/rx/data/client/fork1" dest_cnode="connection_frames" />
+            <cap_microkit_cnode slot="4" pd="serial_virt_tx" dest_cnode="pager_caps" />
+            <cap_notification slot="5" pd="serial_virt_tx" dest_cnode="pager_caps" />
+            <cap_microkit_cnode slot="6" pd="net_virt_tx" dest_cnode="pager_caps" />
+            <cap_notification slot="7" pd="net_virt_tx" dest_cnode="pager_caps" />
+            <cap_microkit_cnode slot="8" pd="net_copy_fork0" dest_cnode="pager_caps" />
+            <cap_notification slot="9" pd="net_copy_fork0" dest_cnode="pager_caps" />
+            <cap_microkit_cnode slot="10" pd="net_copy_fork1" dest_cnode="pager_caps" />
+            <cap_notification slot="11" pd="net_copy_fork1" dest_cnode="pager_caps" />
+        </cspace>
+    </protection_domain>
+    <protection_domain name="client" priority="1" backed="false" fault_handler="pager" fault_id="0">
+        <program_image path="client.elf" />
+        <map mr="generic/serial/queue/serial_virt_tx/client" vaddr="0x20000000" perms="rw" />
+        <map mr="generic/serial/data/serial_virt_tx/client" vaddr="0x20001000" perms="rw" />
+        <map mr="generic/net/queue/net_copy_client/client/free" vaddr="0x20011000" perms="rw" />
+        <map mr="generic/net/queue/net_copy_client/client/active" vaddr="0x20014000" perms="rw" />
+        <map mr="generic/net/rx/data/client/client" vaddr="0x20017000" perms="rw" />
+        <map mr="generic/net/queue/net_virt_tx/client/free" vaddr="0x20117000" perms="rw" />
+        <map mr="generic/net/queue/net_virt_tx/client/active" vaddr="0x2011a000" perms="rw" />
+        <map mr="generic/net/tx/data/client/client" vaddr="0x2011d000" perms="rw" />
+    </protection_domain>
+    <channel>
+        <end pd="serial_driver" id="0" />
+        <end pd="serial_virt_tx" id="0" />
+    </channel>
+    <channel>
+        <end pd="serial_virt_tx" id="1" />
+        <end pd="client" id="0" />
+    </channel>
+    <channel>
+        <end pd="net_driver" id="0" />
+        <end pd="net_virt_rx" id="0" />
+    </channel>
+    <channel>
+        <end pd="net_driver" id="1" />
+        <end pd="net_virt_tx" id="0" />
+    </channel>
+    <channel>
+        <end pd="net_virt_rx" id="1" />
+        <end pd="net_copy_client" id="0" />
+    </channel>
+    <channel>
+        <end pd="net_copy_client" id="1" />
+        <end pd="client" id="1" />
+    </channel>
+    <channel>
+        <end pd="net_virt_tx" id="1" />
+        <end pd="client" id="2" />
+    </channel>
+    <channel>
+        <end pd="net_virt_rx" id="2" />
+        <end pd="net_copy_fork0" id="0" />
+    </channel>
+    <channel>
+        <end pd="net_virt_rx" id="3" />
+        <end pd="net_copy_fork1" id="0" />
+    </channel>
+    <channel>
+        <end pd="pager" id="0" />
+        <end pd="client" id="3" pp="true" />
+    </channel>
+</system>
